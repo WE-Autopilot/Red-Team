@@ -15,8 +15,12 @@ This repository contains an **MPC (Model Predictive Control) controller** design
 Ensure you have the **F1TENTH simulator** and dependencies installed: detailed instructions can be found [here](https://github.com/WE-Autopilot/f1tenth_gym)
 
 ## Roadmap
-- [ ] Implement basic MPC for cursor tracking in open space
-- [ ] Add collision avoidance
+- [ ] Implement F1-tenth
+- [ ] Automatic car and camera tracking, the car should appear static on f1-tenth (i.e. the top of the car should always be facing north)
+- [ ] Get mouse position on F1-Tenth window
+- [ ] Create vector relating car to mouse position. Note: the car
+- [ ] Create MPC controller module, that uses the MPC logic to 
+- [ ] Add collision avoidance (bootleg fallback mechanism)
 - [ ] Optimize control input constraints
 - [ ] Implement lane-following behavior
 
@@ -62,3 +66,23 @@ Navigate to GitHub and create a Pull Request (PR) from your feature branch to th
 
 ### 5. Testing! 🧪
 I need to add tests later......... Don't worry about it for now
+
+### 6. Merge the Pull Request 🔀
+After your PR is approved merge it into dev
+Pull the latest dev branch locally:
+
+```bash
+git checkout dev
+git pull origin dev
+```
+
+### 7. Delete Merged Branches 🧹
+Delete the remote feature branch via GitHub after merging.
+
+```bash
+git branch -d feature/your-feature-name
+```
+Clean up outdated remote references:
+```bash
+git fetch --prune
+```
