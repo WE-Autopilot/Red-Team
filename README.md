@@ -12,7 +12,7 @@ This repository contains an **MPC (Model Predictive Control) controller** design
 - **Dynamic Replanning**: Continuously updates the trajectory to adapt to new cursor positions.
 
 ## Installation
-Ensure you have the **F1TENTH simulator** and dependencies installed: detailed instruvtions can be found [here](https://github.com/WE-Autopilot/f1tenth_gym)
+Ensure you have the **F1TENTH simulator** and dependencies installed: detailed instructions can be found [here](https://github.com/WE-Autopilot/f1tenth_gym)
 
 ## Roadmap
 - [ ] Implement basic MPC for cursor tracking in open space
