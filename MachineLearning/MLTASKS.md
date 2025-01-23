@@ -15,7 +15,10 @@ This repository implements a neural network model for **autonomous vehicle path 
    - Concatenates CNN output (`512-dim`) with dynamic parameters (`1-dim` speed) → `513-dim` vector.  
 4. **Linear Projection**:  
    - Sequential FC layers: `512 → 512 → 512 → 256 → 128`.  
-   - Output: `128-dim` path vector (10 waypoints + metadata).  
+   - Output: `128-dim` path vector (10 waypoints + metadata).
+
+![image](https://github.com/user-attachments/assets/6c9302a9-d1cb-4625-b945-776381f62dd1)
+
 
 ---
 
