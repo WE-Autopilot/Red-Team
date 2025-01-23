@@ -14,16 +14,18 @@ This repository implements a neural network model for **autonomous vehicle path 
 3. **Dynamic Fusion**:  
    - Concatenates CNN output (`512-dim`) with dynamic parameters (`1-dim` speed) → `513-dim` vector.  
 4. **Linear Projection**:  
-   - Sequential FC layers: `513 → 512 → 512 → 256 → 128`.  
-   - Output: `128-dim` path vector (10 waypoints + metadata).  
+   - Sequential FC layers: `512 → 512 → 512 → 256 → 128`.  
+   - Output: `128-dim` path vector (10 waypoints + metadata).
+
+![image](https://github.com/user-attachments/assets/6c9302a9-d1cb-4625-b945-776381f62dd1)
+
 
 ---
 
 ## Loss Function  
-- **Positional MSE**: Penalizes deviations in predicted vs. truth `(x, y, heading)`.  
-- **Curvature Regularization**:  
-  ```python  
-  loss += λ * torch.sum(torch.clamp(|pred_curvature| - max_turn, min=0) ** 2)  
+- **Positional MSE**: Penalizes deviations in predicted vs. truth.  
+- **Curvature Regularization**:
+
 
 ## Installation
 Ensure you have the **F1TENTH simulator** and dependencies installed: detailed instructions can be found [here](https://github.com/WE-Autopilot/f1tenth_gym)
