@@ -21,9 +21,8 @@ This repository implements a neural network model for **autonomous vehicle path 
 
 ## Loss Function  
 - **Positional MSE**: Penalizes deviations in predicted vs. truth.  
-- **Curvature Regularization**:  
-  ```python  
-  loss += λ * torch.sum(torch.clamp(|pred_curvature| - max_turn, min=0) ** 2)  
+- **Curvature Regularization**:
+
 
 ## Installation
 Ensure you have the **F1TENTH simulator** and dependencies installed: detailed instructions can be found [here](https://github.com/WE-Autopilot/f1tenth_gym)
