@@ -20,7 +20,7 @@ This repository implements a neural network model for **autonomous vehicle path 
 ---
 
 ## Loss Function  
-- **Positional MSE**: Penalizes deviations in predicted vs. ground-truth `(x, y, heading)`.  
+- **Positional MSE**: Penalizes deviations in predicted vs. truth `(x, y, heading)`.  
 - **Curvature Regularization**:  
   ```python  
   loss += λ * torch.sum(torch.clamp(|pred_curvature| - max_turn, min=0) ** 2)  
