@@ -14,7 +14,7 @@ This repository implements a neural network model for **autonomous vehicle path 
 3. **Dynamic Fusion**:  
    - Concatenates CNN output (`512-dim`) with dynamic parameters (`1-dim` speed) → `513-dim` vector.  
 4. **Linear Projection**:  
-   - Sequential FC layers: `513 → 512 → 512 → 256 → 128`.  
+   - Sequential FC layers: `512 → 512 → 512 → 256 → 128`.  
    - Output: `128-dim` path vector (10 waypoints + metadata).  
 
 ---
