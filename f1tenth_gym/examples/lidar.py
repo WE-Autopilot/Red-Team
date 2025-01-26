@@ -103,7 +103,8 @@ def main():
             map_ext=conf.map_ext,
             num_agents=1,
             timestep=0.01,
-            integrator=Integrator.RK4
+            integrator=Integrator.RK4,
+            render_options={'window_size': (256, 256)}
         )
         env.add_render_callback(render_callback)
 
