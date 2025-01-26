@@ -8,7 +8,7 @@ Below is how to commit to the repository.
 ### 1. Clone the Repository 📥
 Start by cloning the repository to your local machine. Make a new folder entitled "WEAP" or something similar so you have all the club-related code in one location:
 ```bash
-git clone https://github.com/WE-Autopilot/Red-MPC-controller
+git clone https://github.com/WE-Autopilot/Red-Team
 cd Red-MPC-Controller
 ```
 
