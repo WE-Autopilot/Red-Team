@@ -1,290 +1,148 @@
 import time
-from f110_gym.envs.base_classes import Integrator
 import yaml
 import gym
 import numpy as np
 from argparse import Namespace
 
-from numba import njit
-
 from pyglet.gl import GL_POINTS
 
-"""
-Planner Helpers
-"""
-@njit(fastmath=False, cache=True)
-def nearest_point_on_trajectory(point, trajectory):
+# For convenience, we store the latest observation in a global so we can draw it.
+# In a more advanced setup, you'd have a class structure to avoid globals.
+LATEST_OBS = None
+
+def render_lidar_points(env_renderer):
     """
-    Return the nearest point along the given piecewise linear trajectory.
-
-    Same as nearest_point_on_line_segment, but vectorized. This method is quite fast, time constraints should
-    not be an issue so long as trajectories are not insanely long.
-
-        Order of magnitude: trajectory length: 1000 --> 0.0002 second computation (5000fps)
-
-    point: size 2 numpy array
-    trajectory: Nx2 matrix of (x,y) trajectory waypoints
-        - these must be unique. If they are not unique, a divide by 0 error will destroy the world
+    Render LiDAR points from LATEST_OBS onto the simulator screen.
     """
-    diffs = trajectory[1:,:] - trajectory[:-1,:]
-    l2s   = diffs[:,0]**2 + diffs[:,1]**2
-    # this is equivalent to the elementwise dot product
-    # dots = np.sum((point - trajectory[:-1,:]) * diffs[:,:], axis=1)
-    dots = np.empty((trajectory.shape[0]-1, ))
-    for i in range(dots.shape[0]):
-        dots[i] = np.dot((point - trajectory[i, :]), diffs[i, :])
-    t = dots / l2s
-    t[t<0.0] = 0.0
-    t[t>1.0] = 1.0
-    # t = np.clip(dots / l2s, 0.0, 1.0)
-    projections = trajectory[:-1,:] + (t*diffs.T).T
-    # dists = np.linalg.norm(point - projections, axis=1)
-    dists = np.empty((projections.shape[0],))
-    for i in range(dists.shape[0]):
-        temp = point - projections[i]
-        dists[i] = np.sqrt(np.sum(temp*temp))
-    min_dist_segment = np.argmin(dists)
-    return projections[min_dist_segment], dists[min_dist_segment], t[min_dist_segment], min_dist_segment
-
-@njit(fastmath=False, cache=True)
-def first_point_on_trajectory_intersecting_circle(point, radius, trajectory, t=0.0, wrap=False):
-    """
-    starts at beginning of trajectory, and find the first point one radius away from the given point along the trajectory.
-
-    Assumes that the first segment passes within a single radius of the point
-
-    http://codereview.stackexchange.com/questions/86421/line-segment-to-circle-collision-algorithm
-    """
-    start_i = int(t)
-    start_t = t % 1.0
-    first_t = None
-    first_i = None
-    first_p = None
-    trajectory = np.ascontiguousarray(trajectory)
-    for i in range(start_i, trajectory.shape[0]-1):
-        start = trajectory[i,:]
-        end = trajectory[i+1,:]+1e-6
-        V = np.ascontiguousarray(end - start)
-
-        a = np.dot(V,V)
-        b = 2.0*np.dot(V, start - point)
-        c = np.dot(start, start) + np.dot(point,point) - 2.0*np.dot(start, point) - radius*radius
-        discriminant = b*b-4*a*c
-
-        if discriminant < 0:
-            continue
-        #   print "NO INTERSECTION"
-        # else:
-        # if discriminant >= 0.0:
-        discriminant = np.sqrt(discriminant)
-        t1 = (-b - discriminant) / (2.0*a)
-        t2 = (-b + discriminant) / (2.0*a)
-        if i == start_i:
-            if t1 >= 0.0 and t1 <= 1.0 and t1 >= start_t:
-                first_t = t1
-                first_i = i
-                first_p = start + t1 * V
-                break
-            if t2 >= 0.0 and t2 <= 1.0 and t2 >= start_t:
-                first_t = t2
-                first_i = i
-                first_p = start + t2 * V
-                break
-        elif t1 >= 0.0 and t1 <= 1.0:
-            first_t = t1
-            first_i = i
-            first_p = start + t1 * V
-            break
-        elif t2 >= 0.0 and t2 <= 1.0:
-            first_t = t2
-            first_i = i
-            first_p = start + t2 * V
-            break
-    # wrap around to the beginning of the trajectory if no intersection is found1
-    if wrap and first_p is None:
-        for i in range(-1, start_i):
-            start = trajectory[i % trajectory.shape[0],:]
-            end = trajectory[(i+1) % trajectory.shape[0],:]+1e-6
-            V = end - start
-
-            a = np.dot(V,V)
-            b = 2.0*np.dot(V, start - point)
-            c = np.dot(start, start) + np.dot(point,point) - 2.0*np.dot(start, point) - radius*radius
-            discriminant = b*b-4*a*c
-
-            if discriminant < 0:
-                continue
-            discriminant = np.sqrt(discriminant)
-            t1 = (-b - discriminant) / (2.0*a)
-            t2 = (-b + discriminant) / (2.0*a)
-            if t1 >= 0.0 and t1 <= 1.0:
-                first_t = t1
-                first_i = i
-                first_p = start + t1 * V
-                break
-            elif t2 >= 0.0 and t2 <= 1.0:
-                first_t = t2
-                first_i = i
-                first_p = start + t2 * V
-                break
-
-    return first_p, first_i, first_t
-
-@njit(fastmath=False, cache=True)
-def get_actuation(pose_theta, lookahead_point, position, lookahead_distance, wheelbase):
-    """
-    Returns actuation
-    """
-    waypoint_y = np.dot(np.array([np.sin(-pose_theta), np.cos(-pose_theta)]), lookahead_point[0:2]-position)
-    speed = lookahead_point[2]
-    if np.abs(waypoint_y) < 1e-6:
-        return speed, 0.
-    radius = 1/(2.0*waypoint_y/lookahead_distance**2)
-    steering_angle = np.arctan(wheelbase/radius)
-    return speed, steering_angle
-
-class PurePursuitPlanner:
-    """
-    Example Planner
-    """
-    def __init__(self, conf, wb):
-        self.wheelbase = wb
-        self.conf = conf
-        self.load_waypoints(conf)
-        self.max_reacquire = 20.
-
-        self.drawn_waypoints = []
-
-    def load_waypoints(self, conf):
-        """
-        loads waypoints
-        """
-        self.waypoints = np.loadtxt(conf.wpt_path, delimiter=conf.wpt_delim, skiprows=conf.wpt_rowskip)
-
-    def render_waypoints(self, e):
-        """
-        update waypoints being drawn by EnvRenderer
-        """
-
-        #points = self.waypoints
-
-        points = np.vstack((self.waypoints[:, self.conf.wpt_xind], self.waypoints[:, self.conf.wpt_yind])).T
-        
-        scaled_points = 50.*points
-
-        for i in range(points.shape[0]):
-            if len(self.drawn_waypoints) < points.shape[0]:
-                b = e.batch.add(1, GL_POINTS, None, ('v3f/stream', [scaled_points[i, 0], scaled_points[i, 1], 0.]),
-                                ('c3B/stream', [183, 193, 222]))
-                self.drawn_waypoints.append(b)
-            else:
-                self.drawn_waypoints[i].vertices = [scaled_points[i, 0], scaled_points[i, 1], 0.]
-        
-    def _get_current_waypoint(self, waypoints, lookahead_distance, position, theta):
-        """
-        gets the current waypoint to follow
-        """
-        wpts = np.vstack((self.waypoints[:, self.conf.wpt_xind], self.waypoints[:, self.conf.wpt_yind])).T
-        nearest_point, nearest_dist, t, i = nearest_point_on_trajectory(position, wpts)
-        if nearest_dist < lookahead_distance:
-            lookahead_point, i2, t2 = first_point_on_trajectory_intersecting_circle(position, lookahead_distance, wpts, i+t, wrap=True)
-            if i2 == None:
-                return None
-            current_waypoint = np.empty((3, ))
-            # x, y
-            current_waypoint[0:2] = wpts[i2, :]
-            # speed
-            current_waypoint[2] = waypoints[i, self.conf.wpt_vind]
-            return current_waypoint
-        elif nearest_dist < self.max_reacquire:
-            return np.append(wpts[i, :], waypoints[i, self.conf.wpt_vind])
-        else:
-            return None
-
-    def plan(self, pose_x, pose_y, pose_theta, lookahead_distance, vgain):
-        """
-        gives actuation given observation
-        """
-        position = np.array([pose_x, pose_y])
-        lookahead_point = self._get_current_waypoint(self.waypoints, lookahead_distance, position, pose_theta)
-
-        if lookahead_point is None:
-            return 4.0, 0.0
-
-        speed, steering_angle = get_actuation(pose_theta, lookahead_point, position, lookahead_distance, self.wheelbase)
-        speed = vgain * speed
-
-        return speed, steering_angle
-
-
-class FlippyPlanner:
-    """
-    Planner designed to exploit integration methods and dynamics.
-    For testing only. To observe this error, use single track dynamics for all velocities >0.1
-    """
-    def __init__(self, speed=1, flip_every=1, steer=2):
-        self.speed = speed
-        self.flip_every = flip_every
-        self.counter = 0
-        self.steer = steer
+    global LATEST_OBS
     
-    def render_waypoints(self, *args, **kwargs):
-        pass
+    # If no observations yet, do nothing.
+    if LATEST_OBS is None:
+        return
 
-    def plan(self, *args, **kwargs):
-        if self.counter%self.flip_every == 0:
-            self.counter = 0
-            self.steer *= -1
-        return self.speed, self.steer
+    # Extract car pose and LiDAR scan from observation (assuming single agent).
+    # obs['poses_x'][0], obs['poses_y'][0], obs['poses_theta'][0] are the car pose
+    # obs['scans'][0] is an array of LiDAR distances (range readings).
+    car_x = LATEST_OBS['poses_x'][0]
+    car_y = LATEST_OBS['poses_y'][0]
+    car_theta = LATEST_OBS['poses_theta'][0]
+    lidar_ranges = LATEST_OBS['scans'][0]
+
+    # Typical F1TENTH LiDAR spans ~270 degrees; 
+    # adjust angles if your simulator is configured differently.
+    num_beams = len(lidar_ranges)
+    angle_min = -135.0 * np.pi / 180.0
+    angle_max =  135.0 * np.pi / 180.0
+    lidar_angles = np.linspace(angle_min, angle_max, num_beams)
+
+    # We'll create a fresh batch of points each frame. 
+    # (Alternatively, store them in a list and update them to be more efficient.)
+    lidar_batch = env_renderer.batch.add(
+        num_beams,              # how many points
+        GL_POINTS,              # draw mode
+        None,                   # group
+        ('v3f/stream', np.zeros(num_beams * 3)),   # vertex positions (x, y, z=0)
+        ('c3B/stream', np.zeros(num_beams * 3, dtype=np.uint8)) # colors
+    )
+
+    # Each beam -> transform from polar (range, angle) to global (x, y)
+    # Then scale for rendering (f110_gym often scales real meters by 50).
+    coords = []
+    colors = []
+    for i in range(num_beams):
+        r = lidar_ranges[i]
+        angle = lidar_angles[i]
+
+        # Ignore invalid or too-distant readings (if any).
+        if not np.isfinite(r) or r > 20.0:
+            # Just push an off-screen coordinate or keep it near the car at zero range
+            gx = car_x
+            gy = car_y
+        else:
+            # Convert local (r,angle) → global (x,y)
+            gx = car_x + r * np.cos(car_theta + angle)
+            gy = car_y + r * np.sin(car_theta + angle)
+
+        # Scale up for rendering (sim coords often multiplied ~50).
+        sx = 50.0 * gx
+        sy = 50.0 * gy
+
+        # Collect final coords. z=0
+        coords.extend([sx, sy, 0.0])
+        # Example color: bright green
+        colors.extend([0, 255, 0])
+
+    # Update the batch data in one shot
+    lidar_batch.vertices = coords
+    lidar_batch.colors = colors
+
+
+def render_callback(env_renderer):
+    global LATEST_OBS
+
+    # Update camera to follow the car (assuming single agent).
+    # This is similar logic to the original script, but stripped down.
+    if LATEST_OBS is not None:
+        x = LATEST_OBS['poses_x'][0]
+        y = LATEST_OBS['poses_y'][0]
+
+        # Just a naive bounding box around the car for the camera
+        e = env_renderer
+        e.left   = 50.0 * (x - 10.0)
+        e.right  = 50.0 * (x + 10.0)
+        e.bottom = 50.0 * (y - 10.0)
+        e.top    = 50.0 * (y + 10.0)
+
+    # Draw the LiDAR points
+    render_lidar_points(env_renderer)
 
 
 def main():
-    """
-    main entry point
-    """
-
-    work = {'mass': 3.463388126201571, 'lf': 0.15597534362552312, 'tlad': 0.82461887897713965, 'vgain': 1.375}#0.90338203837889}
-    
+    # Load a config to pick a map, spawn location, etc. 
+    # Minimal example: we only care that 'map_path', 'map_ext', etc. exist.
     with open('config_example_map.yaml') as file:
         conf_dict = yaml.load(file, Loader=yaml.FullLoader)
     conf = Namespace(**conf_dict)
 
-    planner = PurePursuitPlanner(conf, (0.17145+0.15875)) #FlippyPlanner(speed=0.2, flip_every=1, steer=10)
+    # Create environment (single agent). 
+    # integrator can be RK4 or EULER if the environment supports it.
+    env = gym.make(
+        'f110_gym:f110-v0',
+        map=conf.map_path,
+        map_ext=conf.map_ext,
+        num_agents=1,
+        timestep=0.01
+    )
 
-    def render_callback(env_renderer):
-        # custom extra drawing function
-
-        e = env_renderer
-
-        # update camera to follow car
-        x = e.cars[0].vertices[::2]
-        y = e.cars[0].vertices[1::2]
-        top, bottom, left, right = max(y), min(y), min(x), max(x)
-        e.score_label.x = left
-        e.score_label.y = top - 700
-        e.left = left - 800
-        e.right = right + 800
-        e.top = top + 800
-        e.bottom = bottom - 800
-
-        planner.render_waypoints(env_renderer)
-
-    env = gym.make('f110_gym:f110-v0', map=conf.map_path, map_ext=conf.map_ext, num_agents=1, timestep=0.01, integrator=Integrator.RK4)
+    # Add our custom render callback to draw LiDAR
     env.add_render_callback(render_callback)
-    
-    obs, step_reward, done, info = env.reset(np.array([[conf.sx, conf.sy, conf.stheta]]))
+
+    # Reset environment with initial pose
+    obs, step_reward, done, info = env.reset(
+        np.array([[conf.sx, conf.sy, conf.stheta]])
+    )
     env.render()
+
+    global LATEST_OBS
+    LATEST_OBS = obs  # store the initial observation so we can render
 
     laptime = 0.0
     start = time.time()
 
+    # Run until done. We'll keep the car stationary (steer=0, speed=0).
     while not done:
-        speed, steer = planner.plan(obs['poses_x'][0], obs['poses_y'][0], obs['poses_theta'][0], work['tlad'], work['vgain'])
-        obs, step_reward, done, info = env.step(np.array([[steer, speed]]))
+        # Car won't move, but LiDAR will still be drawn each step.
+        action = np.array([[0.0, 0.0]])
+
+        obs, step_reward, done, info = env.step(action)
         laptime += step_reward
+
+        # Update global obs, then render
+        LATEST_OBS = obs
         env.render(mode='human')
-        
-    print('Sim elapsed time:', laptime, 'Real elapsed time:', time.time()-start)
+
+    print('Sim elapsed time:', laptime, 'Real elapsed time:', time.time() - start)
+
 
 if __name__ == '__main__':
     main()
