@@ -14,7 +14,7 @@ drawn_lidar_points = []
 global_obs = None
 
 def render_lidar_points(env_renderer, obs):
-    global drawn_lidar_points
+    global drawn_lidar_points, random_arrow
 
     if obs is None or 'scans' not in obs:
         return
@@ -55,6 +55,37 @@ def render_lidar_points(env_renderer, obs):
             ]
 
 def render_callback(env_renderer):
+    def render_arrow(env_renderer, arrow_vec):
+        if arrow is None:
+            return
+        
+        x, y, theta = arrow_vec
+        scale = 50.0
+        x_scaled = x * scale
+        y_scaled = y * scale
+        arrow_length = 64 # pixel length
+        x_head = x_scaled + arrow_length * np.cos(theta)
+        y_head = y_scaled + arrow_length * np.sin(theta)
+        arrowhead_size = 10
+        left_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
+        left_y = y_head - arrowhead_size * np.sin(theta - np.pi / 6)
+        right_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
+        right_y = y_head - arrowhead_size * np.sin(theta + np.pi / 6)
+
+        #drawing arrow line
+        env_renderer.batch.add(
+            2, pyglet.gl.GL_LINES, None,
+            ('v3f/stream', [x_scaled, y_scaled, 0.0, x_head, y_head, 0.0])
+            ('c3B/stream', [0, 255, 0, 0, 255, 0])
+        )
+
+        #drawing arrowhead
+        env_renderer.batch.add(
+            3, pyglet.gl.GL_TRIANGLES, None,
+            ('v3f/stream', [x_head, y_head, 0.0, left_x, left_y, 0.0, right_x, right_y, 0.0]),
+            ('c3B/stream', [0, 255, 0, 0, 255, 0, 0, 255, 0])
+        )
+
     global global_obs
 
     e = env_renderer
@@ -81,6 +112,7 @@ def render_callback(env_renderer):
     e.bottom = bottom - 800
 
     render_lidar_points(env_renderer, global_obs)
+    render_arrow(env_renderer, random_arrow)
 
 def main():
     dataset = []
@@ -113,6 +145,7 @@ def main():
         random_y = np.random.uniform(-2.0, 2.0)
         random_theta = np.random.uniform(-np.pi, np.pi)
         print(f"Episode {episode_count} - Spawn: x={random_x:.2f}, y={random_y:.2f}, theta={random_theta:.2f}")
+        random_arrow = np.array([random_x, random_y, random_theta])
 
         init_poses = np.array([[random_x, random_y, random_theta]])
         obs, _, done, _ = env.reset(init_poses)
