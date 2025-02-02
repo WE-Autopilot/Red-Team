@@ -56,7 +56,7 @@ def render_lidar_points(env_renderer, obs):
 
 def render_callback(env_renderer):
     def render_arrow(env_renderer, arrow_vec):
-        if arrow is None:
+        if random_arrow is None:
             return
         
         x, y, theta = arrow_vec
@@ -75,15 +75,15 @@ def render_callback(env_renderer):
         #drawing arrow line
         env_renderer.batch.add(
             2, pyglet.gl.GL_LINES, None,
-            ('v3f/stream', [x_scaled, y_scaled, 0.0, x_head, y_head, 0.0])
-            ('c3B/stream', [0, 255, 0, 0, 255, 0])
+            ('v3f', (x_scaled, y_scaled, 0.0, x_head, y_head, 0.0))
+            ('c3B', (0, 255, 0, 0, 255, 0))
         )
 
         #drawing arrowhead
         env_renderer.batch.add(
             3, pyglet.gl.GL_TRIANGLES, None,
-            ('v3f/stream', [x_head, y_head, 0.0, left_x, left_y, 0.0, right_x, right_y, 0.0]),
-            ('c3B/stream', [0, 255, 0, 0, 255, 0, 0, 255, 0])
+            ('v3f', (x_head, y_head, 0.0, left_x, left_y, 0.0, right_x, right_y, 0.0)),
+            ('c3B', (0, 255, 0, 0, 255, 0, 0, 255, 0))
         )
 
     global global_obs
@@ -123,7 +123,7 @@ def main():
     # Create directory if it doesn't exist
     os.makedirs(save_path, exist_ok=True)  # Add this line
     while True:
-        global global_obs
+        global global_obs, random_arrow
 
         with open('config_example_map.yaml') as file:
             conf_dict = yaml.safe_load(file)
