@@ -55,7 +55,7 @@ def render_lidar_points(env_renderer, obs):
             ]
 
 def render_callback(env_renderer):
-    def render_arrow(env_renderer, arrow_vec):
+    def render_arrow(env_renderer, arrow_vec): # method to render the vector arrow
         if random_arrow is None:
             return
         
@@ -63,7 +63,9 @@ def render_callback(env_renderer):
         scale = 50.0
         x_scaled = x * scale
         y_scaled = y * scale
-        arrow_length = 64 # pixel length
+        arrow_length = 64 # arrow length in pixels
+
+        # getting coordinates of the arrowhead
         x_head = x_scaled + arrow_length * np.cos(theta)
         y_head = y_scaled + arrow_length * np.sin(theta)
         arrowhead_size = 10
@@ -72,18 +74,18 @@ def render_callback(env_renderer):
         right_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
         right_y = y_head - arrowhead_size * np.sin(theta + np.pi / 6)
 
-        #drawing arrow line
+        #drawing the arrow line
         env_renderer.batch.add(
             2, pyglet.gl.GL_LINES, None,
-            ('v3f', (x_scaled, y_scaled, 0.0, x_head, y_head, 0.0)),
-            ('c3B', (0, 255, 0, 0, 255, 0))
+            ('v3f', (x_scaled, y_scaled, 0.0, x_head, y_head, 0.0)), # vertex positions
+            ('c3B', (0, 255, 0, 0, 255, 0)) # arrow colour (green)
         )
 
-        #drawing arrowhead
+        #drawing the arrowhead
         env_renderer.batch.add(
             3, pyglet.gl.GL_TRIANGLES, None,
-            ('v3f', (x_head, y_head, 0.0, left_x, left_y, 0.0, right_x, right_y, 0.0)),
-            ('c3B', (0, 255, 0, 0, 255, 0, 0, 255, 0))
+            ('v3f', (x_head, y_head, 0.0, left_x, left_y, 0.0, right_x, right_y, 0.0)), #vertex positions
+            ('c3B', (0, 255, 0, 0, 255, 0, 0, 255, 0)) #arrow colour (green)
         )
 
     global global_obs
