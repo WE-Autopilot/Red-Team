@@ -55,6 +55,35 @@ def render_lidar_points(env_renderer, obs):
                 xs_scaled[i], ys_scaled[i], 0.0
             ]
 
+def make_arrow(arrow_vec): #separate function to generate coordinates needed to draw arrow vector
+    if arrow_vec is None:
+        return
+    
+    x, y, theta = arrow_vec
+    scale = 50.0
+
+    car_length = 0.3
+    #computing front of the car using its orientation
+    front_x = x + car_length * np.cos(theta)
+    front_y = y + car_length * np.sin(theta)
+
+    x_scaled = front_x * scale 
+    y_scaled = front_y * scale 
+    arrow_length = 20 # arrow length in pixels
+
+    # getting coordinates of the arrowhead
+    x_head = x_scaled + arrow_length * np.cos(theta)
+    y_head = y_scaled + arrow_length * np.sin(theta)
+    arrowhead_size = 15
+    left_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
+    left_y = y_head - arrowhead_size * np.sin(theta - np.pi / 6)
+    right_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
+    right_y = y_head - arrowhead_size * np.sin(theta + np.pi / 6)
+
+
+    return x_scaled, y_scaled, x_head, y_head, left_x, left_y, right_x, right_y
+
+
 def render_callback(env_renderer):
     def render_arrow(env_renderer, arrow_vec): # method to render the vector arrow
         global arrow_graphics
@@ -64,34 +93,12 @@ def render_callback(env_renderer):
             arrow.delete()
         arrow_graphics = []
 
-        if arrow_vec is None:
-            return
-        
-        x, y, theta = arrow_vec
-        scale = 50.0
-
-        car_length = 0.3
-        #computing front of the car using its orientation
-        front_x = x + car_length * np.cos(theta)
-        front_y = y + car_length * np.sin(theta)
-
-        x_scaled = front_x * scale 
-        y_scaled = front_y * scale 
-        arrow_length = 50 # arrow length in pixels
-
-        # getting coordinates of the arrowhead
-        x_head = x_scaled + arrow_length * np.cos(theta)
-        y_head = y_scaled + arrow_length * np.sin(theta)
-        arrowhead_size = 15
-        left_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
-        left_y = y_head - arrowhead_size * np.sin(theta - np.pi / 6)
-        right_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
-        right_y = y_head - arrowhead_size * np.sin(theta + np.pi / 6)
+        this_arrow = make_arrow(arrow_vec)
 
         #drawing the arrow line
         arrow_line = env_renderer.batch.add(
             2, pyglet.gl.GL_LINES, None,
-            ('v3f', (x_scaled, y_scaled, 0.0, x_head, y_head, 0.0)), # vertex positions
+            ('v3f', (this_arrow[0], this_arrow[1], 0.0, this_arrow[2], this_arrow[3], 0.0)), # vertex positions
             ('c3B', (0, 255, 0, 0, 255, 0)) # arrow colour (green)
         )
         arrow_graphics.append(arrow_line) #adding the arrow line to the arrow_graphics array so it can be cleared later
@@ -99,7 +106,7 @@ def render_callback(env_renderer):
         #drawing the arrowhead
         arrow_head = env_renderer.batch.add(
             3, pyglet.gl.GL_TRIANGLES, None,
-            ('v3f', (x_head, y_head, 0.0, left_x, left_y, 0.0, right_x, right_y, 0.0)), #vertex positions
+            ('v3f', (this_arrow[2], this_arrow[3], 0.0, this_arrow[4], this_arrow[5], 0.0, this_arrow[6], this_arrow[7], 0.0)), #vertex positions
             ('c3B', (0, 255, 0, 0, 255, 0, 0, 255, 0)) #arrow colour (green)
         )
         arrow_graphics.append(arrow_head) #adding the arrow head to the arrow_graphics array so it can be cleared later
