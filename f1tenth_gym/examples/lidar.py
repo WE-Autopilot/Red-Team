@@ -75,7 +75,7 @@ def render_callback(env_renderer):
         #drawing arrow line
         env_renderer.batch.add(
             2, pyglet.gl.GL_LINES, None,
-            ('v3f', (x_scaled, y_scaled, 0.0, x_head, y_head, 0.0))
+            ('v3f', (x_scaled, y_scaled, 0.0, x_head, y_head, 0.0)),
             ('c3B', (0, 255, 0, 0, 255, 0))
         )
 
