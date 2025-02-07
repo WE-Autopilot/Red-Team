@@ -12,6 +12,7 @@ from f110_gym.envs.base_classes import Integrator
 
 drawn_lidar_points = []
 global_obs = None
+arrow_graphics = [] # array to store arrow graphics so they can be removed later
 
 def render_lidar_points(env_renderer, obs):
     global drawn_lidar_points, random_arrow
@@ -56,37 +57,52 @@ def render_lidar_points(env_renderer, obs):
 
 def render_callback(env_renderer):
     def render_arrow(env_renderer, arrow_vec): # method to render the vector arrow
-        if random_arrow is None:
+        global arrow_graphics
+
+        # section below clears the arrow that was previously generated
+        for arrow in arrow_graphics: 
+            arrow.delete()
+        arrow_graphics = []
+
+        if arrow_vec is None:
             return
         
         x, y, theta = arrow_vec
         scale = 50.0
-        x_scaled = x * scale
-        y_scaled = y * scale
-        arrow_length = 64 # arrow length in pixels
+
+        car_length = 0.3
+        #computing front of the car using its orientation
+        front_x = x + car_length * np.cos(theta)
+        front_y = y + car_length * np.sin(theta)
+
+        x_scaled = front_x * scale 
+        y_scaled = front_y * scale 
+        arrow_length = 50 # arrow length in pixels
 
         # getting coordinates of the arrowhead
         x_head = x_scaled + arrow_length * np.cos(theta)
         y_head = y_scaled + arrow_length * np.sin(theta)
-        arrowhead_size = 10
+        arrowhead_size = 15
         left_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
         left_y = y_head - arrowhead_size * np.sin(theta - np.pi / 6)
         right_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
         right_y = y_head - arrowhead_size * np.sin(theta + np.pi / 6)
 
         #drawing the arrow line
-        env_renderer.batch.add(
+        arrow_line = env_renderer.batch.add(
             2, pyglet.gl.GL_LINES, None,
             ('v3f', (x_scaled, y_scaled, 0.0, x_head, y_head, 0.0)), # vertex positions
             ('c3B', (0, 255, 0, 0, 255, 0)) # arrow colour (green)
         )
+        arrow_graphics.append(arrow_line) #adding the arrow line to the arrow_graphics array so it can be cleared later
 
         #drawing the arrowhead
-        env_renderer.batch.add(
+        arrow_head = env_renderer.batch.add(
             3, pyglet.gl.GL_TRIANGLES, None,
             ('v3f', (x_head, y_head, 0.0, left_x, left_y, 0.0, right_x, right_y, 0.0)), #vertex positions
             ('c3B', (0, 255, 0, 0, 255, 0, 0, 255, 0)) #arrow colour (green)
         )
+        arrow_graphics.append(arrow_head) #adding the arrow head to the arrow_graphics array so it can be cleared later
 
     global global_obs
 
@@ -126,6 +142,8 @@ def main():
     os.makedirs(save_path, exist_ok=True)  # Add this line
     while True:
         global global_obs, random_arrow
+        random_arrow = None #setting current random_arrow to none so new one can be generated
+        arrow_graphics = [] # clearing any stored arrow graphics
 
         with open('config_example_map.yaml') as file:
             conf_dict = yaml.safe_load(file)
