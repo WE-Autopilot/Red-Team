@@ -81,7 +81,7 @@ def make_arrow(arrow_vec): #separate function to generate coordinates needed to 
     right_y = y_head - arrowhead_size * np.sin(theta + np.pi / 6)
 
 
-    return x_scaled, y_scaled, x_head, y_head, left_x, left_y, right_x, right_y
+    return x_scaled, y_scaled, x_head, y_head, left_x, left_y, right_x, right_y, theta
 
 
 def render_callback(env_renderer):
@@ -93,31 +93,43 @@ def render_callback(env_renderer):
             arrow.delete()
         arrow_graphics = []
 
+        this_arrow = make_arrow(arrow_vec)
 
-        for c in range(10):
-            this_arrow = make_arrow(arrow_vec)
+        #drawing the arrow line
+        arrow_line = env_renderer.batch.add(
+            2, pyglet.gl.GL_LINES, None,
+            ('v3f', (this_arrow[0], this_arrow[1], 0.0, this_arrow[2], this_arrow[3], 0.0)), # vertex positions
+            ('c3B', (0, 255, 0, 0, 255, 0)) # arrow colour (green)
+        )
+        arrow_graphics.append(arrow_line) #adding the arrow line to the arrow_graphics array so it can be cleared later
+        
 
-            #drawing the arrow line
-            arrow_line = env_renderer.batch.add(
+        #drawing the arrowhead
+        arrow_head = env_renderer.batch.add(
+            3, pyglet.gl.GL_TRIANGLES, None,
+            ('v3f', (this_arrow[2], this_arrow[3], 0.0, this_arrow[4], this_arrow[5], 0.0, this_arrow[6], this_arrow[7], 0.0)), #vertex positions
+            ('c3B', (0, 255, 0, 0, 255, 0, 0, 255, 0)) #arrow colour (green)
+        )
+        arrow_graphics.append(arrow_head) #adding the arrow head to the arrow_graphics array so it can be cleared later
+
+        xBase = this_arrow[2]
+        yBase = this_arrow[3]
+        trajectoryAngle = this_arrow[8]
+        arrowLength = 20
+        for c in range(5):
+            newXHead = xBase + arrowLength * np.cos(trajectoryAngle)
+            newYHead = yBase + arrowLength * np.sin(trajectoryAngle)
+
+            fake_line = env_renderer.batch.add(
                 2, pyglet.gl.GL_LINES, None,
-                ('v3f', (this_arrow[0], this_arrow[1], 0.0, this_arrow[2], this_arrow[3], 0.0)), # vertex positions
+                ('v3f', (xBase, yBase, 0.0, newXHead, newYHead, 0.0)), # vertex positions
                 ('c3B', (0, 255, 0, 0, 255, 0)) # arrow colour (green)
             )
-            arrow_graphics.append(arrow_line) #adding the arrow line to the arrow_graphics array so it can be cleared later
-            
+            arrow_graphics.append(fake_line) #adding the arrow head to the arrow_graphics array so it can be cleared later
 
-            #drawing the arrowhead
-            arrow_head = env_renderer.batch.add(
-                3, pyglet.gl.GL_TRIANGLES, None,
-                ('v3f', (this_arrow[2], this_arrow[3], 0.0, this_arrow[4], this_arrow[5], 0.0, this_arrow[6], this_arrow[7], 0.0)), #vertex positions
-                ('c3B', (0, 255, 0, 0, 255, 0, 0, 255, 0)) #arrow colour (green)
-            )
-            arrow_graphics.append(arrow_head) #adding the arrow head to the arrow_graphics array so it can be cleared later
-
-            arrow_vec[0] = this_arrow[2]
-            arrow_vec[1] = this_arrow[3]
-
-        
+            #Update x and y base to heads
+            xBase = newXHead
+            yBase = newYHead
 
     global global_obs
 
