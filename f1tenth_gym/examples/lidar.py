@@ -112,13 +112,14 @@ def render_callback(env_renderer):
         )
         arrow_graphics.append(arrow_head) #adding the arrow head to the arrow_graphics array so it can be cleared later
         
-
-
+        #Variables with proper name
         xBase = this_arrow[2]
         yBase = this_arrow[3]
         trajectoryAngle = this_arrow[8]
         arrowLength = 20
+        #Draw 5 arrows
         for c in range(5):
+            #Manually calculate resulting arrow heads; needs to be modularized
             newXHead = xBase + arrowLength * np.cos(trajectoryAngle)
             newYHead = yBase + arrowLength * np.sin(trajectoryAngle)
 
