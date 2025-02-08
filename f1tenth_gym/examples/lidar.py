@@ -95,7 +95,7 @@ def render_callback(env_renderer):
 
         this_arrow = make_arrow(arrow_vec)
 
-        #drawing the arrow line
+            #drawing the arrow line
         arrow_line = env_renderer.batch.add(
             2, pyglet.gl.GL_LINES, None,
             ('v3f', (this_arrow[0], this_arrow[1], 0.0, this_arrow[2], this_arrow[3], 0.0)), # vertex positions
@@ -104,13 +104,15 @@ def render_callback(env_renderer):
         arrow_graphics.append(arrow_line) #adding the arrow line to the arrow_graphics array so it can be cleared later
         
 
-        #drawing the arrowhead
+            #drawing the arrowhead
         arrow_head = env_renderer.batch.add(
             3, pyglet.gl.GL_TRIANGLES, None,
             ('v3f', (this_arrow[2], this_arrow[3], 0.0, this_arrow[4], this_arrow[5], 0.0, this_arrow[6], this_arrow[7], 0.0)), #vertex positions
             ('c3B', (0, 255, 0, 0, 255, 0, 0, 255, 0)) #arrow colour (green)
         )
         arrow_graphics.append(arrow_head) #adding the arrow head to the arrow_graphics array so it can be cleared later
+        
+
 
         xBase = this_arrow[2]
         yBase = this_arrow[3]
