@@ -13,6 +13,8 @@ from f110_gym.envs.base_classes import Integrator
 drawn_lidar_points = []
 global_obs = None
 arrow_graphics = [] # array to store arrow graphics so they can be removed later
+car_length = 0.3
+scale = 50
 
 def render_lidar_points(env_renderer, obs):
     global drawn_lidar_points, random_arrow
@@ -60,28 +62,21 @@ def make_arrow(arrow_vec): #separate function to generate coordinates needed to 
         return
     
     x, y, theta = arrow_vec
-    scale = 50.0
 
-    car_length = 0.3
     #computing front of the car using its orientation
     front_x = x + car_length * np.cos(theta)
     front_y = y + car_length * np.sin(theta)
 
     x_scaled = front_x * scale 
     y_scaled = front_y * scale 
-    arrow_length = 20 # arrow length in pixels
+    arrow_length = (6 * car_length)/ 64 * scale # arrow length in pixels
 
     # getting coordinates of the arrowhead
     x_head = x_scaled + arrow_length * np.cos(theta)
     y_head = y_scaled + arrow_length * np.sin(theta)
-    arrowhead_size = 15
-    left_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
-    left_y = y_head - arrowhead_size * np.sin(theta - np.pi / 6)
-    right_x = x_head - arrowhead_size * np.cos(theta + np.pi / 6)
-    right_y = y_head - arrowhead_size * np.sin(theta + np.pi / 6)
 
 
-    return x_scaled, y_scaled, x_head, y_head, left_x, left_y, right_x, right_y, theta
+    return x_scaled, y_scaled, x_head, y_head, theta
 
 
 def render_callback(env_renderer):
@@ -103,22 +98,13 @@ def render_callback(env_renderer):
         )
         arrow_graphics.append(arrow_line) #adding the arrow line to the arrow_graphics array so it can be cleared later
         
-
-            #drawing the arrowhead
-        arrow_head = env_renderer.batch.add(
-            3, pyglet.gl.GL_TRIANGLES, None,
-            ('v3f', (this_arrow[2], this_arrow[3], 0.0, this_arrow[4], this_arrow[5], 0.0, this_arrow[6], this_arrow[7], 0.0)), #vertex positions
-            ('c3B', (0, 255, 0, 0, 255, 0, 0, 255, 0)) #arrow colour (green)
-        )
-        arrow_graphics.append(arrow_head) #adding the arrow head to the arrow_graphics array so it can be cleared later
-        
         #Variables with proper name
         xBase = this_arrow[2]
         yBase = this_arrow[3]
-        trajectoryAngle = this_arrow[8]
-        arrowLength = 20
-        #Draw 5 arrows
-        for c in range(5):
+        trajectoryAngle = this_arrow[4]
+        arrowLength = (6 * car_length)/64 * scale
+        #Draw 64 arrows
+        for c in range(64):
             #Manually calculate resulting arrow heads; needs to be modularized
             newXHead = xBase + arrowLength * np.cos(trajectoryAngle)
             newYHead = yBase + arrowLength * np.sin(trajectoryAngle)
