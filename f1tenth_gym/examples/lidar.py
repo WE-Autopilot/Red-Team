@@ -12,6 +12,8 @@ from f110_gym.envs.base_classes import Integrator
 
 drawn_lidar_points = []
 global_obs = None
+
+#globals for arrow vector generation
 arrow_graphics = [] # array to store arrow graphics so they can be removed later
 car_length = 0.3
 scale = 50
@@ -57,7 +59,7 @@ def render_lidar_points(env_renderer, obs):
                 xs_scaled[i], ys_scaled[i], 0.0
             ]
 
-def make_arrow(arrow_vec): #separate function to generate coordinates needed to draw arrow vector
+def make_init_arrow(arrow_vec): #function to generate coordinates needed to draw first vector
     if arrow_vec is None:
         return
     
@@ -75,12 +77,31 @@ def make_arrow(arrow_vec): #separate function to generate coordinates needed to 
     x_head = x_scaled + arrow_length * np.cos(theta)
     y_head = y_scaled + arrow_length * np.sin(theta)
 
-
     return x_scaled, y_scaled, x_head, y_head, theta
 
+def make_vector_path(env_renderer, init_arrow): #function to generate the rest of the vector arrows in the path
+    #initializing the starting x and y to the head of the initial arrow, and storing theta in next_trajec
+    next_x_start = init_arrow[2]
+    next_y_start = init_arrow[3]
+    next_trajec = init_arrow[4]
+    arrow_length = (6 * car_length)/64 * scale
 
-def render_callback(env_renderer):
-    def render_arrow(env_renderer, arrow_vec): # method to render the vector arrow
+    for c in range (63): #generating the remaining 63 vector arrows in the path
+        next_x_head = next_x_start + arrow_length * np.cos(next_trajec)
+        next_y_head = next_y_start + arrow_length * np.sin(next_trajec)
+        
+        next_line = env_renderer.batch.add( #rendering the current vector arrow
+                2, pyglet.gl.GL_LINES, None,
+                ('v3f', (next_x_start, next_y_start, 0.0, next_x_head, next_y_head, 0.0)), # vertex positions
+                ('c3B', (0, 255, 0, 0, 255, 0)) # arrow colour (green)
+            )
+        arrow_graphics.append(next_line) #adding the arrow to the arrow_graphics array so it can be cleared later
+        
+        # updating starting x and y to head of the previous arrow before next arrow is generated
+        next_x_start = next_x_head
+        next_y_start = next_y_head
+
+def render_arrow(env_renderer, arrow_vec): # method to render the vector arrow
         global arrow_graphics
 
         # section below clears the arrow that was previously generated
@@ -88,9 +109,8 @@ def render_callback(env_renderer):
             arrow.delete()
         arrow_graphics = []
 
-        this_arrow = make_arrow(arrow_vec)
-
-            #drawing the arrow line
+        this_arrow = make_init_arrow(arrow_vec) #generating coords for the initial vector arrow
+        #drawing the arrow line
         arrow_line = env_renderer.batch.add(
             2, pyglet.gl.GL_LINES, None,
             ('v3f', (this_arrow[0], this_arrow[1], 0.0, this_arrow[2], this_arrow[3], 0.0)), # vertex positions
@@ -98,28 +118,9 @@ def render_callback(env_renderer):
         )
         arrow_graphics.append(arrow_line) #adding the arrow line to the arrow_graphics array so it can be cleared later
         
-        #Variables with proper name
-        xBase = this_arrow[2]
-        yBase = this_arrow[3]
-        trajectoryAngle = this_arrow[4]
-        arrowLength = (6 * car_length)/64 * scale
-        #Draw 64 arrows
-        for c in range(64):
-            #Manually calculate resulting arrow heads; needs to be modularized
-            newXHead = xBase + arrowLength * np.cos(trajectoryAngle)
-            newYHead = yBase + arrowLength * np.sin(trajectoryAngle)
+        make_vector_path(env_renderer, this_arrow) #calling make_vector_path on the initial vector arrow
 
-            fake_line = env_renderer.batch.add(
-                2, pyglet.gl.GL_LINES, None,
-                ('v3f', (xBase, yBase, 0.0, newXHead, newYHead, 0.0)), # vertex positions
-                ('c3B', (0, 255, 0, 0, 255, 0)) # arrow colour (green)
-            )
-            arrow_graphics.append(fake_line) #adding the arrow head to the arrow_graphics array so it can be cleared later
-
-            #Update x and y base to heads
-            xBase = newXHead
-            yBase = newYHead
-
+def render_callback(env_renderer):
     global global_obs
 
     e = env_renderer
