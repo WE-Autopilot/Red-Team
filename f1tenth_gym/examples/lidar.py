@@ -11,7 +11,7 @@ from pyglet.gl import GL_POINTS
 from f110_gym.envs.base_classes import Integrator
 
 drawn_lidar_points = []
-vector_array = np.empty((64, 2))
+vector_array = np.empty((64, 2)) #global vector array -- storing (x,y) pairs for beginning coordinates of each vector arrow
 global_obs = None
 
 #globals for arrow vector generation
@@ -71,7 +71,7 @@ def make_init_arrow(arrow_vec): #function to generate coordinates needed to draw
     front_y = y + car_length * np.sin(theta)
 
     # Add the initial arrow coordinates to the vector array
-    vector_array[0] = (front_x, front_y)
+    vector_array[0] = (front_x, front_y) #putting x and y coordinates of arrow beginning in the vector array
 
     x_scaled = front_x * scale 
     y_scaled = front_y * scale 
@@ -91,7 +91,7 @@ def make_vector_path(env_renderer, init_arrow): #function to generate the rest o
     arrow_length = (6 * car_length)/64 * scale
 
     for c in range (63): #generating the remaining 63 vector arrows in the path
-        vector_array[c+1] = (next_x_start, next_y_start)
+        vector_array[c+1] = (next_x_start, next_y_start) #putting x and y coordinates of arrow beginning in the vector array
 
         next_x_head = next_x_start + arrow_length * np.cos(next_trajec)
         next_y_head = next_y_start + arrow_length * np.sin(next_trajec)
@@ -167,7 +167,7 @@ def main():
         global global_obs, random_arrow
         random_arrow = None #setting current random_arrow to none so new one can be generated
         arrow_graphics = [] # clearing any stored arrow graphics
-        vector_array = np.empty((64, 2))
+        vector_array = np.empty((64, 2)) #clearing vector path array so coordinates from next random generation can overwrite
 
         with open('config_example_map.yaml') as file:
             conf_dict = yaml.safe_load(file)
