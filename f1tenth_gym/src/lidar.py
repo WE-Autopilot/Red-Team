@@ -11,10 +11,16 @@ from pyglet.gl import GL_POINTS
 from f110_gym.envs.base_classes import Integrator
 
 drawn_lidar_points = []
+vector_array = np.empty((64, 2)) #global vector array -- storing (x,y) pairs for beginning coordinates of each vector arrow
 global_obs = None
 
+#globals for arrow vector generation
+arrow_graphics = [] # array to store arrow graphics so they can be removed later
+car_length = 0.3
+scale = 50
+
 def render_lidar_points(env_renderer, obs):
-    global drawn_lidar_points
+    global drawn_lidar_points, random_arrow
 
     if obs is None or 'scans' not in obs:
         return
@@ -54,6 +60,72 @@ def render_lidar_points(env_renderer, obs):
                 xs_scaled[i], ys_scaled[i], 0.0
             ]
 
+def make_init_arrow(arrow_vec): #function to generate coordinates needed to draw first vector
+    if arrow_vec is None:
+        return
+    
+    x, y, theta = arrow_vec
+
+    #computing front of the car using its orientation
+    front_x = x + car_length * np.cos(theta)
+    front_y = y + car_length * np.sin(theta)
+
+    # Add the initial arrow coordinates to the vector array
+    vector_array[0] = (front_x, front_y) #putting x and y coordinates of arrow beginning in the vector array
+
+    x_scaled = front_x * scale 
+    y_scaled = front_y * scale 
+    arrow_length = (6 * car_length)/ 64 * scale # arrow length in pixels
+
+    # getting coordinates of the arrowhead
+    x_head = x_scaled + arrow_length * np.cos(theta)
+    y_head = y_scaled + arrow_length * np.sin(theta)
+
+    return x_scaled, y_scaled, x_head, y_head, theta
+
+def make_vector_path(env_renderer, init_arrow): #function to generate the rest of the vector arrows in the path
+    #initializing the starting x and y to the head of the initial arrow, and storing theta in next_trajec
+    next_x_start = init_arrow[2]
+    next_y_start = init_arrow[3]
+    next_trajec = init_arrow[4]
+    arrow_length = (6 * car_length)/64 * scale
+
+    for c in range (63): #generating the remaining 63 vector arrows in the path
+        vector_array[c+1] = (next_x_start, next_y_start) #putting x and y coordinates of arrow beginning in the vector array
+
+        next_x_head = next_x_start + arrow_length * np.cos(next_trajec)
+        next_y_head = next_y_start + arrow_length * np.sin(next_trajec)
+        
+        next_line = env_renderer.batch.add( #rendering the current vector arrow
+                2, pyglet.gl.GL_LINES, None,
+                ('v3f', (next_x_start, next_y_start, 0.0, next_x_head, next_y_head, 0.0)), # vertex positions
+                ('c3B', (0, 255, 0, 0, 255, 0)) # arrow colour (green)
+            )
+        arrow_graphics.append(next_line) #adding the arrow to the arrow_graphics array so it can be cleared later
+        
+        # updating starting x and y to head of the previous arrow before next arrow is generated
+        next_x_start = next_x_head
+        next_y_start = next_y_head
+
+def render_arrow(env_renderer, arrow_vec): # method to render the vector arrow
+        global arrow_graphics
+
+        # section below clears the arrow that was previously generated
+        for arrow in arrow_graphics: 
+            arrow.delete()
+        arrow_graphics = []
+
+        this_arrow = make_init_arrow(arrow_vec) #generating coords for the initial vector arrow
+        #drawing the arrow line
+        arrow_line = env_renderer.batch.add(
+            2, pyglet.gl.GL_LINES, None,
+            ('v3f', (this_arrow[0], this_arrow[1], 0.0, this_arrow[2], this_arrow[3], 0.0)), # vertex positions
+            ('c3B', (0, 255, 0, 0, 255, 0)) # arrow colour (green)
+        )
+        arrow_graphics.append(arrow_line) #adding the arrow line to the arrow_graphics array so it can be cleared later
+        
+        make_vector_path(env_renderer, this_arrow) #calling make_vector_path on the initial vector arrow
+
 def render_callback(env_renderer):
     global global_obs
 
@@ -81,6 +153,7 @@ def render_callback(env_renderer):
     e.bottom = bottom - 800
 
     render_lidar_points(env_renderer, global_obs)
+    render_arrow(env_renderer, random_arrow)
 
 def main():
     dataset = []
@@ -91,7 +164,10 @@ def main():
     # Create directory if it doesn't exist
     os.makedirs(save_path, exist_ok=True)  # Add this line
     while True:
-        global global_obs
+        global global_obs, random_arrow
+        random_arrow = None #setting current random_arrow to none so new one can be generated
+        arrow_graphics = [] # clearing any stored arrow graphics
+        vector_array = np.empty((64, 2)) #clearing vector path array so coordinates from next random generation can overwrite
 
         with open('config_example_map.yaml') as file:
             conf_dict = yaml.safe_load(file)
@@ -113,6 +189,7 @@ def main():
         random_y = np.random.uniform(-2.0, 2.0)
         random_theta = np.random.uniform(-np.pi, np.pi)
         print(f"Episode {episode_count} - Spawn: x={random_x:.2f}, y={random_y:.2f}, theta={random_theta:.2f}")
+        random_arrow = np.array([random_x, random_y, random_theta])
 
         init_poses = np.array([[random_x, random_y, random_theta]])
         obs, _, done, _ = env.reset(init_poses)
