@@ -4,15 +4,20 @@ import gym
 import numpy as np
 import pyglet
 import datetime
+import cvxpy as cp
+import matplotlib.pyplot as plt
 from argparse import Namespace
 import os
 
 from pyglet.gl import GL_POINTS
 from f110_gym.envs.base_classes import Integrator
+from scipy.interpolate import CubicSpline
 
 drawn_lidar_points = []
 vector_array = np.empty((64, 2)) #global vector array -- storing (x,y) pairs for beginning coordinates of each vector arrow
 global_obs = None
+
+state_history = None #MPC state history
 
 #globals for arrow vector generation
 arrow_graphics = [] # array to store arrow graphics so they can be removed later
@@ -126,8 +131,144 @@ def render_arrow(env_renderer, arrow_vec): # method to render the vector arrow
         
         make_vector_path(env_renderer, this_arrow) #calling make_vector_path on the initial vector arrow
 
+def MPC():
+    global state_history
+
+    # Calculates the distance between each pair of vector points on the track, and adds them all to one cumulative arc length
+    dists = [0]
+    for i in range(1, len(vector_array)):
+        dists.append(dists[-1] + np.linalg.norm(vector_array[i] - vector_array[i-1]))
+    dists = np.array(dists)
+
+    # Uses the cubic spline function to interpolate between the points on the track
+    cs_x = CubicSpline(dists, vector_array[:, 0])
+    cs_y = CubicSpline(dists, vector_array[:, 1])
+
+        # ---------------- MPC Controller ----------------
+
+    # Simulation parameters
+    timeStep = 0.1  # time step (seconds), how often our simulation will update
+    totalSteps = 1000  # total simulation steps, how long the simulation will run
+    horizonLength = 10  # MPC horizon (number of steps), how far ahead the controller plans
+
+    # 2D double-integrator model:
+    # State: [x, y, vx, vy]; Control: [ax, ay]
+    A = np.array([[1, 0, timeStep, 0],
+                [0, 1, 0, timeStep],
+                [0, 0, 1,  0],
+                [0, 0, 0,  1]])
+    B = np.array([[0.5 * timeStep**2, 0],
+                [0, 0.5 * timeStep**2],
+                [timeStep, 0],
+                [0, timeStep]])
+
+    # MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
+    stateCost = np.diag([1, 1, 0.6, 0.6])
+    inputCost = np.diag([0.01, 0.01])
+    terminalCost = stateCost
+
+    # Define a desired constant speed along the track.
+    desiredVelocity = 2.5
+
+    # Precompute the reference trajectory along the drawn track.
+    # For each simulation time (plus horizon), compute the reference state.
+    # We use s = v_des * t (i.e., the distance along the track increases at constant speed).
+    ref_traj = np.zeros((totalSteps + horizonLength + 1, 4))  # 4x4 Array to store the reference trajectory at each time step (+ the horizon)
+    for i in range(totalSteps + horizonLength + 1):
+        t = i * timeStep  # Current time
+        s = desiredVelocity * t  # arc-length traveled along the track
+
+        # If s exceeds the maximum distance of the drawn track, hold the last point.
+        if s > dists[-1]:
+            s = dists[-1]
+        
+        # Compute the reference position from the spline.
+        x_ref = cs_x(s)
+        y_ref = cs_y(s)
+        
+        # Compute the derivative (velocity components) from the spline derivatives.
+        vx_ref = cs_x.derivative()(s)
+        vy_ref = cs_y.derivative()(s)
+        
+        # Optionally normalize the velocity to the desired speed.
+        speed = np.hypot(vx_ref, vy_ref)  # Calculates magnitue of the velocity vector
+        if speed > 1e-3:
+            vx_ref = desiredVelocity * vx_ref / speed
+            vy_ref = desiredVelocity * vy_ref / speed
+        else:
+            vx_ref = 0
+            vy_ref = 0
+        
+        ref_traj[i, :] = np.array([x_ref, y_ref, vx_ref, vy_ref])
+
+    # Set the initial state.
+    # Here we start at the first point of the drawn track, with zero velocity.
+    x_current = np.array([track[0, 0], track[0, 1], 0, 0])
+
+    # ---------------- MPC Simulation ----------------
+
+    state_history = []
+
+    # Iterates through the simulation steps
+    for t in range(totalSteps):
+        # Define cvxpy variables for the state and control over the horizon.
+        x = cp.Variable((4, horizonLength + 1))  # Array to store the state at each time step
+        u = cp.Variable((2, horizonLength))  # Array to store the control input at each time step
+        
+        cost = 0
+        constraints = []
+        
+        # Initial condition for the horizon. ensuring the first state in the horizon = the current state
+        constraints += [x[:, 0] == x_current]
+        
+        # Build the cost function and dynamics constraints over the horizon.
+        for k in range(horizonLength):
+            ref_state = ref_traj[t + k]  # The reference state at the current step in the horizon
+            cost += cp.quad_form(x[:, k] - ref_state, stateCost) + cp.quad_form(u[:, k], inputCost)  # Adds a penalty to any deviation from the reference state and control input
+            constraints += [x[:, k + 1] == A @ x[:, k] + B @ u[:, k]]  # Constraints on the state dynamics
+            constraints += [u[:, k] <= np.array([1.0, 1.0]),
+                            u[:, k] >= np.array([-1.0, -1.0])]  # Constraints on the control inputs (between -1 & 1)
+        
+        # Terminal cost for the final state in the horizon.
+        ref_state_terminal = ref_traj[t + horizonLength]
+        cost += cp.quad_form(x[:, horizonLength] - ref_state_terminal, terminalCost)
+        
+        # Solve the MPC optimization problem.
+        prob = cp.Problem(cp.Minimize(cost), constraints)
+        prob.solve(solver=cp.OSQP, warm_start=True)
+        
+        # Extract the first control input from the optimal sequence.
+        u_apply = u[:, 0].value
+        if u_apply is None:
+            u_apply = np.zeros(2)
+        
+        # Update the current state using the system dynamics.
+        x_current = A @ x_current + B @ u_apply
+        state_history.append(x_current)
+
+    # The state history will now contain the full trajectory the car would take
+    state_history = np.array(state_history)
+
+    ax.plot(state_history[:, 0], state_history[:, 1], 'r--', label="Drawn State History")
+
+def render_MPC(env_renderer, state_history):
+    # Check if the state history is available
+    if state_history is not None and len(state_history) > 0:
+        # Plot the MPC path using pyglet
+        for i in range(len(state_history) - 1):
+            x1, y1 = state_history[i]
+            x2, y2 = state_history[i + 1]
+            
+            # Draw a line between consecutive points in the MPC path
+            pyglet.graphics.draw(2, pyglet.gl.GL_LINES,
+                                 ('v2f', (x1, y1, x2, y2)),  # Line between points
+                                 ('c3B', (255, 255, 255) * 2))  # Blue color for the MPC path
+
+
 def render_callback(env_renderer):
     global global_obs
+
+    global state_history
 
     e = env_renderer
     # Modified window resizing logic
@@ -154,6 +295,7 @@ def render_callback(env_renderer):
 
     render_lidar_points(env_renderer, global_obs)
     render_arrow(env_renderer, random_arrow)
+    render_MPC(env_renderer, state_history)
 
 def main():
     dataset = []
