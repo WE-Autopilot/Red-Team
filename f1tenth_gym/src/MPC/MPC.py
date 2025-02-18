@@ -165,8 +165,9 @@ ax.set_ylim(np.min(track[:, 1]) - 5, np.max(track[:, 1]) + 5)
 ax.set_aspect('equal')
 ax.set_title("MPC Following Your Drawn Racetrack")
 
-# Plot the drawn track (reference) for context.
+# Plot the drawn track (reference) for context and the state history along with it
 ax.plot(track[:, 0], track[:, 1], 'r--', label="Drawn Track")
+ax.plot(state_history[:, 0], state_history[:, 1], 'g-', label="Car Trajectory")
 ax.legend()
 
 # Car drawing parameters (the car is represented as a rectangle).
