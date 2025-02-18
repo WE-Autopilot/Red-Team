@@ -132,13 +132,29 @@ def render_arrow(env_renderer, arrow_vec): # method to render the vector arrow
         make_vector_path(env_renderer, this_arrow) #calling make_vector_path on the initial vector arrow
 
 def MPC():
+    global vector_array
     global state_history
 
     # Calculates the distance between each pair of vector points on the track, and adds them all to one cumulative arc length
     dists = [0]
     for i in range(1, len(vector_array)):
         dists.append(dists[-1] + np.linalg.norm(vector_array[i] - vector_array[i-1]))
+
     dists = np.array(dists)
+
+    # Remove duplicates (if any) and sort both the distances and vector_array accordingly
+    unique_indices = np.unique(dists, return_index=True)[1]
+    dists = dists[unique_indices]
+    vector_array = vector_array[unique_indices]
+
+    # Ensure dists are strictly increasing by checking
+    if np.any(np.diff(dists) <= 0):  # If any value is non-increasing
+        print("Warning: Dists is not strictly increasing. Sorting...")
+        sorted_indices = np.argsort(dists)  # Get the sorted indices
+        dists = dists[sorted_indices]  # Sort distances
+        vector_array = vector_array[sorted_indices]  # Reorder vector_array to match sorted dists
+
+
 
     # Uses the cubic spline function to interpolate between the points on the track
     cs_x = CubicSpline(dists, vector_array[:, 0])
@@ -203,7 +219,7 @@ def MPC():
 
     # Set the initial state.
     # Here we start at the first point of the drawn track, with zero velocity.
-    x_current = np.array([track[0, 0], track[0, 1], 0, 0])
+    x_current = np.array([vector_array[0, 0], vector_array[0, 1], 0, 0])
 
     # ---------------- MPC Simulation ----------------
 
@@ -249,20 +265,23 @@ def MPC():
     # The state history will now contain the full trajectory the car would take
     state_history = np.array(state_history)
 
-    ax.plot(state_history[:, 0], state_history[:, 1], 'r--', label="Drawn State History")
 
 def render_MPC(env_renderer, state_history):
-    # Check if the state history is available
-    if state_history is not None and len(state_history) > 0:
-        # Plot the MPC path using pyglet
+    # section below clears the arrow that was previously generated
+    
+
+    if state_history is not None and len(state_history) > 1:
         for i in range(len(state_history) - 1):
-            x1, y1 = state_history[i]
-            x2, y2 = state_history[i + 1]
-            
-            # Draw a line between consecutive points in the MPC path
-            pyglet.graphics.draw(2, pyglet.gl.GL_LINES,
-                                 ('v2f', (x1, y1, x2, y2)),  # Line between points
-                                 ('c3B', (255, 255, 255) * 2))  # Blue color for the MPC path
+            x1, y1 = state_history[i][0], state_history[i][1]  # Extract x, y positions from the state
+            x2, y2 = state_history[i + 1][0], state_history[i + 1][1]  # Next state
+
+            # Add a line to represent the path from one point to the next in the MPC trajectory
+            trajectory = env_renderer.batch.add(
+                2, pyglet.gl.GL_LINES, None,
+                ('v2f', (x1, y1, x2, y2)),  # Line between two consecutive points
+                ('c3B', (255, 255, 255) * 2)  # White color for the MPC path
+            )
+
 
 
 def render_callback(env_renderer):
@@ -339,10 +358,13 @@ def main():
         env.render(mode='human')
 
         episode_data = []
-        
+
+        MPC()
+
         for i in range(10):
             if done:
                 break
+
             # Random actions
             random_steer = np.random.uniform(-0.5, 0.5)
             random_speed = np.random.uniform(0.0, 3.0)
@@ -395,6 +417,8 @@ def main():
             np.savez_compressed(filename, data=np.array(dataset))
             print(f"Saved {len(dataset)} samples to {filename}")
             dataset = []
+
+        
 
 if __name__ == "__main__":
     main()
