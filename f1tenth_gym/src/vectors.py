@@ -267,9 +267,6 @@ def MPC():
 
 
 def render_MPC(env_renderer, state_history):
-    # section below clears the arrow that was previously generated
-    
-
     if state_history is not None and len(state_history) > 1:
         for i in range(len(state_history) - 1):
             x1, y1 = state_history[i][0], state_history[i][1]  # Extract x, y positions from the state
@@ -359,16 +356,15 @@ def main():
 
         episode_data = []
 
-        MPC()
+        #MPC()
 
-        for i in range(10):
+        # Number of steps taken through simulation
+        for i in range(50):
             if done:
                 break
 
-            # Random actions
-            random_steer = np.random.uniform(-0.5, 0.5)
-            random_speed = np.random.uniform(0.0, 3.0)
-            action = np.array([[random_steer, random_speed]])
+            # Action taking during sim step. Needs two variables Steering and throttle. Steering: -1 Max Left, 1 Max Right | Throttle: -1 Max Reverse, 1 Max Throttle
+            action = np.array([[1, 1]])
 
             obs, reward, done, info = env.step(action)
             global_obs = obs
