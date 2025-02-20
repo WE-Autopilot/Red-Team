@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import gym
+import numpy as np
 
 class Actor(nn.Module):
     """
@@ -135,7 +136,21 @@ def clamp_vector_angle_diff(prev_angle: float, desired_angle: float, max_diff_de
     :return: The clamped angle in radians.
     """
 
-def compute_vectors_with_angle_clamp(raw_action: np.ndarray) -> np.ndarray:
+    max_diff_rad = np.radians(max_diff_deg) # Converts degrees to radians
+    angle_diff = desired_angle - prev_angle # Gets the difference between the desired and the previous angles
+
+    #Ensures angle differences stay within [-π, π] to prevent large jumps when crossing ±180°.
+    angle_diff = (desired_angle - prev_angle + np.pi) % (2 * np.pi) - np.pi
+
+    # If the angle difference is greater than EX: 10 degrees, then clamp
+    if angle_diff > max_diff_rad:
+        return prev_angle + max_diff_rad
+    elif angle_diff < - max_diff_rad:
+        return prev_angle - max_diff_rad
+    
+    return desired_angle # if it is within the limit (ex:10 degree) that keep it as it is (ex: 5 degrees)
+
+def compute_vectors_with_angle_clamp(raw_action: np.ndarray, max_diff_deg: float = 10.0) -> np.ndarray:
     """
     Interprets 'raw_action' (shape=(32,)) as 16 increments in [-1,1]^2,
     forcing the first vector to be (1,0) and clamping subsequent angles ±10°.
@@ -143,6 +158,30 @@ def compute_vectors_with_angle_clamp(raw_action: np.ndarray) -> np.ndarray:
     :param raw_action: A 1D array of length 32 (16 x 2).
     :return: A (16,2) array of clamped increments in [-1,1].
     """
+    assert raw_action.shape == (32,), "Raw action must be a 32D vector (16 x 2D movements)."
+
+    # Reshape the action vector into 16 movement vectors of (x, y)
+    vectors = raw_action.reshape(16, 2)
+
+    # Normalize each (x, y) vector to have unit length (ensuring direction is preserved)
+    vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+
+    # It creates an output array for clamped movement vectors
+    clamped_vectors = np.zeros_like(vectors)
+
+    # First movement vector is fixed to (1,0) for consistent direction
+    clamped_vectors[0] = [1, 0]  
+    prev_angle = np.arctan2(clamped_vectors[0][1], clamped_vectors[0][0])  # Get initial angle
+
+    for i in range(1, 16):
+        desired_angle = np.arctan2(vectors[i][1], vectors[i][0])  # It creates the desired angle
+        clamped_angle = clamp_vector_angle_diff(prev_angle, desired_angle, max_diff_deg)  # This is the Clamp angle
+
+        # Converts the clamped angle back to (x, y)
+        clamped_vectors[i] = [np.cos(clamped_angle), np.sin(clamped_angle)]
+        prev_angle = clamped_angle  # This update the previous angle
+
+    return clamped_vectors
 
 def MPC_controller(target_x: float, target_y: float, car_x: float, car_y: float, car_theta: float) -> np.ndarray:
     """
