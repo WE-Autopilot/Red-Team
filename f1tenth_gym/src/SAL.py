@@ -53,3 +53,40 @@ class Critic(nn.Module):
         :param action: A (batch, action_dim) tensor of actions.
         :return: A (batch, 1) tensor representing Q-values for state-action pairs.
         """
+
+
+class ReplayBuffer:
+    """
+    Purpose: The ReplayBuffer stores (state, action, reward, next_state, done) tuples for off-policy RL. 
+    It supports pushing new transitions and sampling random batches for training.
+    """
+    def __init__(self, capacity: int = 1000000):
+        """
+        Constructs a replay buffer for storing transitions.
+        
+        :param capacity: Maximum number of transitions to store.
+        """
+    
+    def push(self, s: np.ndarray, a: np.ndarray, r: float, ns: np.ndarray, d: bool):
+        """
+        Adds a transition to the replay buffer.
+        
+        :param s: State (observation) array.
+        :param a: Action array.
+        :param r: Reward (float).
+        :param ns: Next state (observation) array.
+        :param d: Done flag (boolean).
+        """
+    
+    def sample(self, batch_size: int):
+        """
+        Samples a batch of transitions from the buffer.
+        
+        :param batch_size: Number of transitions to sample.
+        :return: (states, actions, rewards, next_states, dones) as stacked arrays.
+        """
+    
+    def __len__(self) -> int:
+        """
+        :return: Current number of transitions in the buffer.
+        """
