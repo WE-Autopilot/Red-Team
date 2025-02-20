@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import gym
 
 class Actor(nn.Module):
     """
@@ -90,3 +91,81 @@ class ReplayBuffer:
         """
         :return: Current number of transitions in the buffer.
         """
+
+class SACAgent:
+    def __init__(self, device: torch.device, action_dim: int = 32, gamma: float = 0.99, tau: float = 0.005, alpha: float = 0.2, actor_lr: float = 3e-4, critic_lr: float = 3e-4):
+        """
+        Initializes the Soft Actor-Critic agent.
+        
+        :param device: Torch device (CPU or CUDA).
+        :param action_dim: Dimensionality of the action vector (e.g. 32).
+        :param gamma: Discount factor.
+        :param tau: Soft update coefficient for target critics.
+        :param alpha: Entropy temperature (entropy regularization).
+        :param actor_lr: Learning rate for the actor.
+        :param critic_lr: Learning rate for the critics.
+        """
+
+    def select_action(self, state: np.ndarray, evaluate: bool = False) -> np.ndarray:
+        """
+        Selects an action from the current policy.
+        
+        :param state: A 2D (256,256) or 3D (1,256,256) array representing the observation.
+        :param evaluate: If True, use the mean action (deterministic); else sample stochastically.
+        :return: A 1D array of shape (action_dim,) in [-1,1].
+        """
+
+    def update(self, replay_buffer: 'ReplayBuffer', batch_size: int = 64) -> Tuple[float, float, float]:
+        """
+        Performs one SAC update step (actor + critics).
+        
+        :param replay_buffer: The ReplayBuffer containing transitions.
+        :param batch_size: Number of transitions to sample for the update.
+        :return: (actor_loss, critic1_loss, critic2_loss) as floats.
+        """
+
+
+def clamp_vector_angle_diff(prev_angle: float, desired_angle: float, max_diff_deg: float = 10.0) -> float:
+    """
+    Purpose: Ensures consecutive vectors differ by at most ±10° (or another chosen angle). Helps keep the path smooth.
+    
+    :param prev_angle: The angle of the previous vector (radians).
+    :param desired_angle: The angle of the current vector (radians).
+    :param max_diff_deg: Maximum allowed deviation in degrees.
+    :return: The clamped angle in radians.
+    """
+
+def compute_vectors_with_angle_clamp(raw_action: np.ndarray) -> np.ndarray:
+    """
+    Interprets 'raw_action' (shape=(32,)) as 16 increments in [-1,1]^2,
+    forcing the first vector to be (1,0) and clamping subsequent angles ±10°.
+    
+    :param raw_action: A 1D array of length 32 (16 x 2).
+    :return: A (16,2) array of clamped increments in [-1,1].
+    """
+
+def get_steering_and_speed(target_x: float, target_y: float, car_x: float, car_y: float, car_theta: float) -> np.ndarray:
+    """
+    Computes steering and speed commands aiming from (car_x, car_y, car_theta) to (target_x, target_y).
+    
+    :param target_x: X-coordinate of the target point in global space.
+    :param target_y: Y-coordinate of the target point in global space.
+    :param car_x: Current car X position.
+    :param car_y: Current car Y position.
+    :param car_theta: Current car heading in radians.
+    :return: A 1D array [steering, speed] for the simulator step.
+    """
+
+
+
+##################
+##     MAIN     ##
+##################
+
+def main():
+    print("not working on it yet")
+    
+
+if __name__=="__main__":
+    main()
+
