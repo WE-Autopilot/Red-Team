@@ -54,7 +54,7 @@ cs_y = CubicSpline(dists, track[:, 1])
 
 # Simulation parameters
 timeStep = 0.1 # time step (seconds), how often our simulation will update
-totalSteps = 1000 # total simulation steps, how long the simulation will run
+totalSteps = 30 # total simulation steps, how long the simulation will run
 horizonLength = 10 # MPC horizon (number of steps), how far ahead the controller plans
 
 
@@ -153,6 +153,7 @@ for t in range(totalSteps):
     
     # Update the current state using the system dynamics.
     x_current = A @ x_current + B @ u_apply
+
     state_history.append(x_current)
 
 state_history = np.array(state_history)

@@ -164,7 +164,7 @@ def MPC():
 
     # Simulation parameters
     timeStep = 0.1  # time step (seconds), how often our simulation will update
-    totalSteps = 1000  # total simulation steps, how long the simulation will run
+    totalSteps = 64  # total simulation steps, how long the simulation will run
     horizonLength = 10  # MPC horizon (number of steps), how far ahead the controller plans
 
     # 2D double-integrator model:
@@ -224,6 +224,7 @@ def MPC():
     # ---------------- MPC Simulation ----------------
 
     state_history = []
+    u_history = []
 
     # Iterates through the simulation steps
     for t in range(totalSteps):
@@ -257,13 +258,18 @@ def MPC():
         u_apply = u[:, 0].value
         if u_apply is None:
             u_apply = np.zeros(2)
-        
+        print(f"MPC {t}.u_apply: {u_apply}")
+        u_history.append(u_apply)
+
         # Update the current state using the system dynamics.
         x_current = A @ x_current + B @ u_apply
         state_history.append(x_current)
 
     # The state history will now contain the full trajectory the car would take
     state_history = np.array(state_history)
+    u_history = np.array(u_history)
+
+    return u_history
 
 
 def render_MPC(env_renderer, state_history):
@@ -279,6 +285,26 @@ def render_MPC(env_renderer, state_history):
                 ('c3B', (255, 255, 255) * 2)  # White color for the MPC path
             )
 
+# Convert acceleration (u_apply) into thrust and steer using given theta
+def convert_accel(u_apply, obs):
+    theta = obs['poses_theta'][0]
+    # Desired orientation (direction the car wants to move)
+    theta_des = np.arctan2(u_apply[1], u_apply[0])  # Direction of acceleration
+
+    print(f"u_apply: {u_apply}")
+    print(f"cos: {np.cos(theta)}")
+    print(f"sin: {np.sin(theta)}")
+    # Calculate the thrust as a projection of acceleration along the car's orientation
+    thrust = u_apply[0] * np.cos(theta) + u_apply[1] * np.sin(theta)
+    # Ensure thrust stays within the range of -1 to 1
+    thrust = np.clip(thrust, -1, 1)
+    
+    # Calculate the steering as the difference between the current orientation and the desired orientation
+    steering_angle = -(theta_des - theta)
+    # Clip steering to be between -1 and 1 (max left and right steering)
+    steer = np.clip(steering_angle, -1, 1)
+    
+    return thrust, steer
 
 
 def render_callback(env_renderer):
@@ -356,20 +382,29 @@ def main():
 
         episode_data = []
 
-        #MPC()
 
         # Number of steps taken through simulation
-        for i in range(50):
+        for i in range(100):
             if done:
                 break
+            
+            # Array of acceleration values car should take over vector arrows.
+            # Consist of acceleration vector values along the x and y axis
+            u_apply = MPC()
+            # Values
+            thrust, steer = convert_accel(u_apply[0], obs)
+            print(f"Thrust: {thrust}")
+            print(f"Steer: {steer}")
 
-            # Action taking during sim step. Needs two variables Steering and throttle. Steering: -1 Max Left, 1 Max Right | Throttle: -1 Max Reverse, 1 Max Throttle
-            action = np.array([[1, 1]])
+            # Action taking during sim step. Needs two variables Steering and throttle. Steering: -1 Max Right, 1 Max Left | Throttle: -1 Max Reverse, 1 Max Throttle
+            action = np.array([[steer, thrust]])
 
             obs, reward, done, info = env.step(action)
             global_obs = obs
             env.render(mode='human')
             time.sleep(0.1)
+
+            print(f"Orientation: {obs['poses_theta'][0]}")
 
             # Process LiDAR data into tensor
             lidar_scan = obs['scans'][0]
