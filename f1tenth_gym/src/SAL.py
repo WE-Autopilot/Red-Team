@@ -144,7 +144,7 @@ def compute_vectors_with_angle_clamp(raw_action: np.ndarray) -> np.ndarray:
     :return: A (16,2) array of clamped increments in [-1,1].
     """
 
-def get_steering_and_speed(target_x: float, target_y: float, car_x: float, car_y: float, car_theta: float) -> np.ndarray:
+def MPC_controller(target_x: float, target_y: float, car_x: float, car_y: float, car_theta: float) -> np.ndarray:
     """
     Computes steering and speed commands aiming from (car_x, car_y, car_theta) to (target_x, target_y).
     
