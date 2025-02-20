@@ -12,9 +12,11 @@ import numpy as np
 class SACF110Env(gym.Env):
     print("Ben will do this")
 
+
 ###########################################
 ##   LIDAR TO BITMAP, COURTESY OF ALY    ##
 ###########################################
+
 def _lidar_to_bitmap(
         scan: list[float],               
         winding_dir: str='CCW',          
@@ -164,6 +166,7 @@ def lidar_to_bitmap(
         return np.stack([grayscale_img, grayscale_img, grayscale_img, alpha_channel], axis=-1)  # Shape: (256, 256, 4)
     else:
         raise ValueError("Invalid number of channels. Supported: 1 (grayscale), 3 (RGB), 4 (RGBA)")
+
 
 ##############################
 ##        OPIUM MODEL       ##
