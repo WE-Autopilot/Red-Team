@@ -32,7 +32,7 @@ class Actor(nn.Module):
         self.fc_mean = nn.Linear(512, action_dim) # (batch_size, action_dim)
         self.fc_log_std = nn.Linear(512, action_dim) # (batch_size, action_dim)
     
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass of the actor network.
         
@@ -51,7 +51,7 @@ class Actor(nn.Module):
         return mean, log_std
 
     
-    def sample(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def sample(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Samples an action using the reparameterization trick.
         
@@ -69,7 +69,7 @@ class Actor(nn.Module):
         log_prob = dist.log_prob(action).sum(dim=-1) # Sum over all dimensions of the action.
 
         return action, log_prob
-
+    
 class Critic(nn.Module):
     """
     Purpose: The Critic estimates the Q-value of a given state (the bitmap) and action (the 32D vector). 
@@ -132,3 +132,24 @@ class Critic(nn.Module):
         q = self.q(action_value)
 
         return q
+
+def main():
+    # Make a random 256x256 bitmap.
+    rand_bitmap = torch.rand(1, 1, 256, 256) # Batch size of 1, 1 channel, 256x256 size.
+    rand_bitmap = torch.round(rand_bitmap) # Make it binary (0 or 1).
+    print(f"Random Bitmap: \n {rand_bitmap} \n") # Print random bitmap.
+
+    # Create the Actor instance and send it to the device (CPU or GPU).
+    actor = Actor(32)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    actor = actor.to(device)
+    rand_bitmap = rand_bitmap.to(device)
+
+    # Return a sample of an action from the Actor network.
+    data = actor.sample(rand_bitmap)
+    print(f"Action: \n {data[0]} \n")
+    print(f"Log Prob: \n {data[1]} \n")
+
+# Run the main function.
+if __name__ == "__main__":
+    main()
