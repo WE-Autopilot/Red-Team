@@ -231,6 +231,10 @@ class ReplayBuffer:
     It supports pushing new transitions and sampling random batches for training.
     """
     def __init__(self, capacity: int = 1000000):
+        self.capacity = capacity
+        # creating empty list to store experiences and setting current position for inserting new experiences to index 0
+        self.buffer = []
+        self.position = 0
         """
         Constructs a replay buffer for storing transitions.
         
@@ -238,6 +242,11 @@ class ReplayBuffer:
         """
     
     def push(self, s: np.ndarray, a: np.ndarray, r: float, ns: np.ndarray, d: bool):
+        if len(self.buffer) < self.capacity: #if the buffer isn't at capacity, expand it
+            self.buffer.append(None)
+        self.buffer[self.position] = (s, a, r, ns, d) #inserting pushed experience
+
+        self.position = (self.position + 1) % self.capacity #incrementing position index
         """
         Adds a transition to the replay buffer.
         
@@ -249,6 +258,12 @@ class ReplayBuffer:
         """
     
     def sample(self, batch_size: int):
+        sample_indices = np.random.choice(len(self.buffer), batch_size, replace=False) #gets random indices without any being repeated
+        batch = [self.buffer[i] for i in sample_indices]
+
+        states, actions, rewards, next_states, done = map(np.stack, zip(*batch))
+        
+        return states, actions, rewards, next_states, done
         """
         Samples a batch of transitions from the buffer.
         
@@ -257,6 +272,7 @@ class ReplayBuffer:
         """
     
     def __len__(self) -> int:
+        return len(self.buffer)
         """
         :return: Current number of transitions in the buffer.
         """
