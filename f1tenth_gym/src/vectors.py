@@ -135,26 +135,10 @@ def MPC():
     global vector_array
     global state_history
 
-    # Calculates the distance between each pair of vector points on the track, and adds them all to one cumulative arc length
     dists = [0]
     for i in range(1, len(vector_array)):
         dists.append(dists[-1] + np.linalg.norm(vector_array[i] - vector_array[i-1]))
-
     dists = np.array(dists)
-
-    # Remove duplicates (if any) and sort both the distances and vector_array accordingly
-    unique_indices = np.unique(dists, return_index=True)[1]
-    dists = dists[unique_indices]
-    vector_array = vector_array[unique_indices]
-
-    # Ensure dists are strictly increasing by checking
-    if np.any(np.diff(dists) <= 0):  # If any value is non-increasing
-        print("Warning: Dists is not strictly increasing. Sorting...")
-        sorted_indices = np.argsort(dists)  # Get the sorted indices
-        dists = dists[sorted_indices]  # Sort distances
-        vector_array = vector_array[sorted_indices]  # Reorder vector_array to match sorted dists
-
-
 
     # Uses the cubic spline function to interpolate between the points on the track
     cs_x = CubicSpline(dists, vector_array[:, 0])
@@ -258,7 +242,7 @@ def MPC():
         u_apply = u[:, 0].value
         if u_apply is None:
             u_apply = np.zeros(2)
-        print(f"MPC {t}.u_apply: {u_apply}")
+        # print(f"MPC {t}.u_apply: {u_apply}")
         u_history.append(u_apply)
 
         # Update the current state using the system dynamics.
@@ -292,8 +276,9 @@ def convert_accel(u_apply, obs):
     theta_des = np.arctan2(u_apply[1], u_apply[0])  # Direction of acceleration
 
     print(f"u_apply: {u_apply}")
-    print(f"cos: {np.cos(theta)}")
-    print(f"sin: {np.sin(theta)}")
+    # print(f"cos: {np.cos(theta)}")
+    # print(f"sin: {np.sin(theta)}")
+
     # Calculate the thrust as a projection of acceleration along the car's orientation
     thrust = u_apply[0] * np.cos(theta) + u_apply[1] * np.sin(theta)
     # Ensure thrust stays within the range of -1 to 1
@@ -301,7 +286,7 @@ def convert_accel(u_apply, obs):
     
     # Calculate the steering as the difference between the current orientation and the desired orientation
     steering_angle = -(theta_des - theta)
-    # Clip steering to be between -1 and 1 (max left and right steering)
+    # Clip steering to be between -1 and 1 (max right and left steering)
     steer = np.clip(steering_angle, -1, 1)
     
     return thrust, steer
@@ -390,21 +375,22 @@ def main():
             
             # Array of acceleration values car should take over vector arrows.
             # Consist of acceleration vector values along the x and y axis
-            u_apply = MPC()
+            # u_apply = MPC()
             # Values
-            thrust, steer = convert_accel(u_apply[0], obs)
-            print(f"Thrust: {thrust}")
-            print(f"Steer: {steer}")
+            # thrust, steer = convert_accel(u_apply[0], obs)
+
+            # print(f"Thrust: {thrust}")
+            # print(f"Steer: {steer}")
 
             # Action taking during sim step. Needs two variables Steering and throttle. Steering: -1 Max Right, 1 Max Left | Throttle: -1 Max Reverse, 1 Max Throttle
-            action = np.array([[steer, thrust]])
+            action = np.array([[1, 1]])
 
             obs, reward, done, info = env.step(action)
             global_obs = obs
             env.render(mode='human')
             time.sleep(0.1)
 
-            print(f"Orientation: {obs['poses_theta'][0]}")
+            # print(f"Orientation: {obs['poses_theta'][0]}")
 
             # Process LiDAR data into tensor
             lidar_scan = obs['scans'][0]

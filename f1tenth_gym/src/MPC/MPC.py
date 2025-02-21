@@ -54,7 +54,7 @@ cs_y = CubicSpline(dists, track[:, 1])
 
 # Simulation parameters
 timeStep = 0.1 # time step (seconds), how often our simulation will update
-totalSteps = 30 # total simulation steps, how long the simulation will run
+totalSteps = 1000 # total simulation steps, how long the simulation will run
 horizonLength = 10 # MPC horizon (number of steps), how far ahead the controller plans
 
 

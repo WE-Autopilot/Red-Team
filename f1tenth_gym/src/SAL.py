@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import gym
 import cv2
 import numpy as np
+import cvxpy as cp
+from scipy.interpolate import CubicSpline
 
 ##############################
 ##     GYM ENVIRONOMENT     ##
@@ -333,19 +335,164 @@ def compute_vectors_with_angle_clamp(raw_action: np.ndarray) -> np.ndarray:
 ##     MPC CONTROLLER     ##
 ############################
 
-def MPC_controller(target_x: float, target_y: float, car_x: float, car_y: float, car_theta: float) -> np.ndarray:
+def MPC_controller(path: np.ndarray, desiredVelocity: float, timeStep: float, totalSteps: float, horizonLength: float, stateCost: np.ndarray, inputCost: np.ndarray, terminalCost: np.ndarray) -> np.ndarray:
     """
-    Computes steering and speed commands aiming from (car_x, car_y, car_theta) to (target_x, target_y).
+    Computes control input(x and y acceleration) at each timeStep along path
     
-    :param target_x: X-coordinate of the target point in global space.
-    :param target_y: Y-coordinate of the target point in global space.
-    :param car_x: Current car X position.
-    :param car_y: Current car Y position.
-    :param car_theta: Current car heading in radians.
-    :return: A 1D array [steering, speed] for the simulator step.
+    :param path: Array of vectors of projected path car should follow. Should start at current x, y coordinates of car
+    :param desiredVelocity: Desired constant speed along the track
+    :param timeStep: Time step (seconds), how often our simulation will update
+    :param totalSteps: Total simulation steps, how long the simulation will run
+    :param horizonLength: MPC horizon (number of steps), how far ahead the controller plans
+    :param stateCost: MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
+    :param inputCost: MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
+    :param terminalCost: MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
+
+    :return: An array of [x_acceleration, y_acceleration] for the converter
     """
+    # Calculates the distance between each pair of points along path, and adds them all to one cumulative arc length
+    dists = [0]
+    for i in range(1, len(path)):
+        dists.append(dists[-1] + np.linalg.norm(path[i] - path[i-1]))
+    dists = np.array(dists)
 
+    '''
+    Cublic Splines are cubic functions used to interpolate between points, maintaining smoothness
+    between the points. This is useful for creating the paths for this project.
+    '''
+    # Uses the cubic spline function to interpolate between the points on the track
+    cs_x = CubicSpline(dists, path[:, 0])
+    cs_y = CubicSpline(dists, path[:, 1])
 
+    # 2D double-integrator model:
+    # State: [x, y, vx, vy]; Control: [ax, ay]
+    A = np.array([[1, 0, timeStep, 0],
+                [0, 1, 0, timeStep],
+                [0, 0, 1,  0],
+                [0, 0, 0,  1]])
+    B = np.array([[0.5*timeStep**2, 0],
+                [0, 0.5*timeStep**2],
+                [timeStep, 0],
+                [0, timeStep]])
+
+    # Precompute the reference trajectory along the drawn track.
+    # For each simulation time (plus horizon), compute the reference state.
+    # We use s = v_des * t (i.e., the distance along the track increases at constant speed).
+    ref_traj = np.zeros((totalSteps + horizonLength + 1, 4)) # 4x4 Array to store the reference trajectory at each time step (+ the horizon)
+    for i in range(totalSteps + horizonLength + 1):
+        t = i * timeStep # Current time
+        s = desiredVelocity * t  # arc-length traveled along the track
+
+        # If s exceeds the maximum distance of the drawn track, hold the last point.
+        if s > dists[-1]:
+            s = dists[-1]
+        
+        # Compute the reference position from the spline.
+        x_ref = cs_x(s)
+        y_ref = cs_y(s)
+        
+        # Compute the derivative (velocity components) from the spline derivatives.
+        vx_ref = cs_x.derivative()(s)
+        vy_ref = cs_y.derivative()(s)
+        
+        # Optionally normalize the velocity to the desired speed.
+        speed = np.hypot(vx_ref, vy_ref) # Calculates magnitue of the velocity vector
+        if speed > 1e-3:
+            vx_ref = desiredVelocity * vx_ref / speed
+            vy_ref = desiredVelocity * vy_ref / speed
+        else:
+            vx_ref = 0
+            vy_ref = 0
+        
+        ref_traj[i, :] = np.array([x_ref, y_ref, vx_ref, vy_ref])
+
+    u_history = [] # Record of control inputs at each timeStep
+    state_history = [] # Record of car state at each timeStep
+
+    # Set the initial state.
+    # Here we start at the first point of the drawn track, with zero velocity.
+    x_current = np.array([path[0, 0], path[0, 1], 0, 0])
+    state_history.append(x_current)
+
+    # Iterates through the simulation steps
+    for t in range(totalSteps):
+        # Define cvxpy variables for the state and control over the horizon.
+        x = cp.Variable((4, horizonLength+1)) # Array to store the state at each time step
+        u = cp.Variable((2, horizonLength)) # Array to store the control input at each time step
+        
+        cost = 0
+        constraints = []
+        
+        # Initial condition for the horizon. ensuring the first state in the horizon = the current state
+        constraints += [x[:, 0] == x_current]
+        
+        # Build the cost function and dynamics constraints over the horizon.
+        for k in range(horizonLength):
+            ref_state = ref_traj[t + k] # The reference state at the current step in the horizon
+            cost += cp.quad_form(x[:, k] - ref_state, stateCost) + cp.quad_form(u[:, k], inputCost) # Adds a penalty to any deviation from the reference state and control input
+            constraints += [x[:, k+1] == A @ x[:, k] + B @ u[:, k]] # Constraints on the state dynamics
+            constraints += [u[:, k] <= np.array([1.0, 1.0]),
+                            u[:, k] >= np.array([-1.0, -1.0])] # Constraints on the control inputs (between -1 & 1)
+        
+        # Terminal cost for the final state in the horizon.
+        ref_state_terminal = ref_traj[t + horizonLength]
+        cost += cp.quad_form(x[:, horizonLength] - ref_state_terminal, terminalCost)
+        
+        # Solve the MPC optimization problem.
+        prob = cp.Problem(cp.Minimize(cost), constraints)
+        prob.solve(solver=cp.OSQP, warm_start=True)
+        
+        # Extract the first control input from the optimal sequence.
+        u_apply = u[:, 0].value
+        if u_apply is None:
+            u_apply = np.zeros(2)
+        u_history.append(u_apply)
+
+        # Update the current state using the system dynamics.
+        x_current = A @ x_current + B @ u_apply
+
+        state_history.append(x_current, u_apply)
+    
+    # u_history and state_history can be combined into state_history. Optional
+    u_history = np.array(u_history)
+    state_history = np.array(state_history)
+
+    return u.history
+
+def MPC_converter(x_accel: float, y_accel: float, current_speed: float, current_steer: float, max_steer: float, max_accel: float, max_velo: float, min_velo: float) -> np.ndarray:
+    """
+    Takes MPC Controller control inputs(x and y accelration) and convertes them into a 1D Array of [steering, thrust]
+    
+    :param x_accel: MPC calculated x-acceleration of car
+    :param y_accel: MPC calculated y-acceleration of car
+    :param current_speed: Current speed of car
+    :param current_steer: Current steering angle of car
+    :param max_steer: Maximum possible steering angle of car
+    :param max_accel: Maximum possible acceleration of car
+    :param max_velo: Maximum possible velocity of car (forwards)
+    :param min_velo: Minimum possible velocity of car (backwards)
+
+    :return: A 1D array [steering, thrust] for the simulator step.
+    """
+    # Calculate total acceleration
+    total_accel = np.sqrt(x_accel**2 + y_accel**2)
+    
+    # Normalize the acceleration to within given limits
+    thrust = min(total_accel, max_accel)
+    
+    # Calculate the desired angle from acceleration (direction of desired velocity)
+    desired_steer = np.arctan2(y_accel, x_accel)  # Angle of the desired velocity vector
+    
+    # Calculate the steering angle difference
+    steer_diff = desired_steer - current_steer
+    
+    # Normalize steering
+    if np.fabs(steer_diff) > 1e-4:
+        final_steer = (steer_diff / np.fabs(steer_diff)) * max_steer
+    else:
+        final_steer = 0.0
+    
+    return np.array([final_steer, thrust])
 
 ##################
 ##     MAIN     ##
