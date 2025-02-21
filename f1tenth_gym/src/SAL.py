@@ -91,10 +91,21 @@ class Critic(nn.Module):
 
 def main():
     # Make a random 256x256 bitmap.
-    shape = (256, 256)
-    rand_bitmap = torch.round(torch.rand(shape))
-    print(rand_bitmap)
+    rand_bitmap = torch.rand(1, 1, 256, 256) # Batch size of 1, 1 channel, 256x256 size.
+    rand_bitmap = torch.round(rand_bitmap) # Make it binary (0 or 1).
+    print(f"Random Bitmap: \n {rand_bitmap} \n") # Print random bitmap.
 
-    # Return a sample of an action from the actor network.
+    # Create the Actor instance and send it to the device (CPU or GPU).
     actor = Actor(32)
-    print(actor.sample())
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    actor = actor.to(device)
+    rand_bitmap = rand_bitmap.to(device)
+
+    # Return a sample of an action from the Actor network.
+    data = actor.sample(rand_bitmap)
+    print(f"Action: \n {data[0]} \n")
+    print(f"Log Prob: \n {data[1]} \n")
+
+# Run the main function.
+if __name__ == "__main__":
+    main()
