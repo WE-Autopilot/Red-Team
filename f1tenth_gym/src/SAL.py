@@ -4,6 +4,11 @@ import torch.nn.functional as F
 import gym
 import cv2
 import numpy as np
+import os
+import random
+import bisect
+import pickle
+import math
 import cvxpy as cp
 from scipy.interpolate import CubicSpline
 
@@ -227,16 +232,45 @@ class Critic(nn.Module):
         """
 
 
+class Sample:
+    """
+    Wraps a transition for prioritized replay.
+    """
+    def __init__(self, state, action, reward, next_state, done):
+        self.state = state
+        self.action = action
+        self.reward = reward
+        self.next_state = next_state
+        self.done = done
+        self.weight = 1.0
+        self.cumulative_weight = 1.0
+
+    def is_interesting(self):
+        return self.done or self.reward != 0
+
+    def __lt__(self, other):
+        return self.cumulative_weight < other.cumulative_weight
+    
 class ReplayBuffer:
     """
     Purpose: The ReplayBuffer stores (state, action, reward, next_state, done) tuples for off-policy RL. 
     It supports pushing new transitions and sampling random batches for training.
     """
-    def __init__(self, capacity: int = 1000000):
+    def __init__(self, capacity: int = 1000000, prioritized_replay: bool = False, base_output_dir: str = "."):
         self.capacity = capacity
-        # creating empty list to store experiences and setting current position for inserting new experiences to index 0
         self.buffer = []
         self.position = 0
+        self.prioritized_replay = prioritized_replay
+
+        # For prioritized replay
+        self.num_interesting_samples = 0
+        self.batches_drawn = 0
+
+        # Optionally set up saving directory
+        self.save_buffer_dir = os.path.join(base_output_dir, "models")
+        if not os.path.isdir(self.save_buffer_dir):
+            os.makedirs(self.save_buffer_dir)
+        self.file = "replay_buffer.dat"
         """
         Constructs a replay buffer for storing transitions.
         
@@ -244,11 +278,19 @@ class ReplayBuffer:
         """
     
     def push(self, s: np.ndarray, a: np.ndarray, r: float, ns: np.ndarray, d: bool):
-        if len(self.buffer) < self.capacity: #if the buffer isn't at capacity, expand it
-            self.buffer.append(None)
-        self.buffer[self.position] = (s, a, r, ns, d) #inserting pushed experience
+        if self.prioritized_replay:
+            sample = Sample(s, a, r, ns, d)
+        else:
+            sample = (s, a, r, ns, d)
 
-        self.position = (self.position + 1) % self.capacity #incrementing position index
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(sample)
+        else:
+            self.buffer[self.position] = sample
+        
+        if self.prioritized_replay:
+            self._update_weights()
+        self.position = (self.position + 1) % self.capacity
         """
         Adds a transition to the replay buffer.
         
@@ -260,12 +302,17 @@ class ReplayBuffer:
         """
     
     def sample(self, batch_size: int):
-        sample_indices = np.random.choice(len(self.buffer), batch_size, replace=False) #gets random indices without any being repeated
-        batch = [self.buffer[i] for i in sample_indices]
+        if batch_size > len(self.buffer):
+            raise IndexError(f"Not enough samples ({len(self.buffer)}) to draw a batch of {batch_size}")
 
-        states, actions, rewards, next_states, done = map(np.stack, zip(*batch))
-        
-        return states, actions, rewards, next_states, done
+        if self.prioritized_replay:
+            self.batches_drawn += 1
+            return self._draw_prioritized_batch(batch_size)
+        else:
+            sample_indices = np.random.choice(len(self.buffer), batch_size, replace=False)
+            batch = [self.buffer[i] for i in sample_indices]
+            states, actions, rewards, next_states, dones = map(np.stack, zip(*batch))
+            return states, actions, rewards, next_states, dones
         """
         Samples a batch of transitions from the buffer.
         
@@ -278,6 +325,69 @@ class ReplayBuffer:
         """
         :return: Current number of transitions in the buffer.
         """
+    def save(self):
+        with open(os.path.join(self.save_buffer_dir, self.file), "wb") as f:
+            pickle.dump(self.buffer, f)
+
+    def load(self, file):
+        with open(file, "rb") as f:
+            self.buffer = pickle.load(f)
+
+    def _truncate_list_if_necessary(self):
+        # Truncate the buffer if it exceeds 105% of capacity.
+        if len(self.buffer) > self.capacity * 1.05:
+            if self.prioritized_replay:
+                truncated_weight = 0
+                for i in range(self.capacity, len(self.buffer)):
+                    truncated_weight += self.buffer[i].weight
+                    if self.buffer[i].is_interesting():
+                        self.num_interesting_samples -= 1
+            self.buffer = self.buffer[-self.capacity:]
+            if self.prioritized_replay:
+                for sample in self.buffer:
+                    sample.cumulative_weight -= truncated_weight
+
+    def _draw_prioritized_batch(self, batch_size: int):
+        # Assumes self.buffer is sorted by cumulative_weight
+        batch = []
+        probe = Sample(None, 0, 0, None, False)
+        while len(batch) < batch_size:
+            # Choose a random number between 0 and the last sample's cumulative weight
+            probe.cumulative_weight = random.uniform(0, self.buffer[-1].cumulative_weight)
+            index = bisect.bisect_right(self.buffer, probe)
+            sample = self.buffer[index]
+            # Decay the sample's weight slightly
+            sample.weight = max(1.0, 0.8 * sample.weight)
+            if sample not in batch:
+                batch.append(sample)
+        if self.batches_drawn % 100 == 0:
+            cumulative = 0
+            for sample in self.buffer:
+                cumulative += sample.weight
+                sample.cumulative_weight = cumulative
+        # Convert Sample objects into tuples for consistency with training code
+        batch_tuples = [(s.state, s.action, s.reward, s.next_state, s.done) for s in batch]
+        states, actions, rewards, next_states, dones = map(np.stack, zip(*batch_tuples))
+        return states, actions, rewards, next_states, dones
+
+
+    def _update_weights(self):
+        if len(self.buffer) > 1:
+            last_sample = self.buffer[-1]
+            last_sample.cumulative_weight = last_sample.weight + self.buffer[-2].cumulative_weight
+
+        if self.buffer[-1].is_interesting():
+            self.num_interesting_samples += 1
+            # Boost neighboring samples; number depends on frequency of "interesting" samples
+            uninteresting_range = max(1, len(self.buffer) / max(1, self.num_interesting_samples))
+            uninteresting_range = int(uninteresting_range)
+            for i in range(uninteresting_range, 0, -1):
+                index = len(self.buffer) - i
+                if index < 1:
+                    break
+                boost = 1.0 + 3.0 / math.exp(i / (uninteresting_range / 6.0))
+                self.buffer[index].weight *= boost
+                self.buffer[index].cumulative_weight = self.buffer[index].weight + self.buffer[index - 1].cumulative_weight
 
 class SACAgent:
     def __init__(self, device: torch.device, action_dim: int = 32, gamma: float = 0.99, tau: float = 0.005, alpha: float = 0.2, actor_lr: float = 3e-4, critic_lr: float = 3e-4):
