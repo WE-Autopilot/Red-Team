@@ -569,6 +569,177 @@ def MPC_controller(target_x: float, target_y: float, car_x: float, car_y: float,
     :return: A 1D array [steering, speed] for the simulator step.
     """
 
+def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=1):
+    """
+    Detects if the car is about to collide with an obstacle.
+    
+    :param fill_bitmap: The filled bitmap image of the environment.
+    :param car_x: Current car X position.
+    :param car_y: Current car Y position.
+    :param neighborhood_check: The number of pixels to check around the car.
+    :return: True if a collision is imminent, False otherwise.
+    """
+
+    h, w = fill_bitmap.shape
+    for dy in range(-neighborhood_check, neighborhood_check+1):
+        for dx in range(-neighborhood_check, neighborhood_check+1):
+            # Skip the car's exact center pixel
+            if dx == 0 and dy == 0:
+                continue
+
+            nx = car_x + dx
+            ny = car_y + dy
+            if 0 <= nx < w and 0 <= ny < h:
+                # If a neighbor is white => off-track/collision
+                if fill_bitmap[ny, nx] == 255:
+                    return True
+    return False
+    
+
+def get_wall_normal(fill_bitmap, car_x, car_y, region=10):
+    """
+
+    :param fill_bitmap: The filled bitmap image of the environment.
+    :param car_x: Current car X position.
+    :param car_y: Current car Y position.
+    :param region: The maximum distance to search for a black pixel.
+    :return: A 1D array representing the wall normal.
+    """
+    # 1. Canny Edge Detection
+    edges = cv2.Canny(fill_bitmap, threshold1=50, threshold2=150)
+
+    # 2. Sobel Gradients
+    grad_x = cv2.Sobel(fill_bitmap, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(fill_bitmap, cv2.CV_32F, 0, 1, ksize=3)
+
+    # 3. Gather gradient vectors at edges near (cx, cy)
+    h, w = fill_bitmap.shape
+    x0 = max(0, car_x - region)
+    x1 = min(w, car_x + region + 1)
+    y0 = max(0, car_y - region)
+    y1 = min(h, car_y + region + 1)
+
+    grad_vectors = []
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            if edges[y, x] == 255:  # It's an edge pixel
+                gx = grad_x[y, x]
+                gy = grad_y[y, x]
+                if not (abs(gx) < 1e-5 and abs(gy) < 1e-5):
+                    grad_vectors.append([gx, gy])
+
+    if len(grad_vectors) == 0:
+        return np.array([0.0, 0.0])
+
+    # 4. Average the gradient vectors
+    arr = np.array(grad_vectors, dtype=np.float32)
+    mean_grad = np.mean(arr, axis=0)
+
+    # 5. Normalize
+    norm = np.linalg.norm(mean_grad) + 1e-8
+    mean_grad /= norm
+
+    # By default, the gradient points from darker to brighter.
+    # If your "normal" should point inward or outward, you might flip or rotate:
+    # For example, normal = mean_grad, or normal = -mean_grad, etc.
+    normal = mean_grad
+
+    return normal
+
+
+def compute_collision_angle(wall_normal, car_direction_vec=np.array([0,1])):
+    """
+    Returns the angle (in degrees) between direction_vec and wall_normal.
+
+    :param car_direction_vec: The direction vector of the car.
+    :param wall_normal: The normal vector of the wall.
+    :return: The angle in degrees.
+    """
+    dot = np.dot(car_direction_vec, wall_normal)
+    # Both are unit vectors => no need to divide by norms
+    dot = np.clip(dot, -1.0, 1.0)  # numerical safety
+    angle = np.degrees(np.arccos(dot))
+    return angle
+
+def collision_angle_penalty(fill_bitmap, car_x, car_y):
+    """
+    Check collision. If collision is detected, compute angle-based penalty.
+
+    :param fill_bitmap: The filled bitmap image of the environment.
+    :param car_x: Current X position.
+    :param car_y: Current Y position.
+    :return: The penalty value.
+    """
+    reward_delta = 0.0
+    collided = detect_collison(fill_bitmap, car_x, car_y)
+    if not collided:
+        return 0.0  # No collision => no penalty
+
+    wall_normal = get_wall_normal(fill_bitmap, car_x, car_y)
+    angle_deg = compute_collision_angle(wall_normal)
+    # Map angle to penalty
+    penalty = np.interp(abs(angle_deg), [0, 90], [0.1, 1.0])
+    reward_delta -= penalty
+    return reward_delta
+
+def distance_from_row_center(fill_bitmap, car_x, car_y):
+    """
+    Returns how far car_x is from the 'center' of the drivable area
+    on the row car_y in the fill_bitmap.
+
+    :param fill_bitmap: The filled bitmap image of the environment.
+    :param car_x: Current car X position.
+    :param car_y: Current car Y position.
+    :return: The distance from the center
+    """
+    h, w = fill_bitmap.shape
+
+    # Safety check
+    if not (0 <= car_y < h and 0 <= car_x < w):
+        return None  # Car is out of bounds
+
+    # 1. Find left boundary
+    left_edge = car_x
+    while left_edge >= 0 and fill_bitmap[car_y, left_edge] == 255:
+        left_edge -= 1
+    # Move one pixel into white area
+    left_edge += 1
+
+    # 2. Find right boundary
+    right_edge = car_x
+    while right_edge < w and fill_bitmap[car_y, right_edge] == 255:
+        right_edge += 1
+    # Move one pixel into white area
+    right_edge -= 1
+
+    # If we found valid edges
+    if left_edge < 0 or right_edge >= w or left_edge >= right_edge:
+        # Possibly means car is off track or no white area in that row
+        return None
+
+    # 3. Midpoint
+    midpoint = (left_edge + right_edge) / 2.0
+    # 4. Distance from center
+    dist = abs(car_x - midpoint)
+    # 5. Return distance
+    return dist
+
+def centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50):
+    """
+    If the car is near the 'center' of the lane (in that row),
+    give higher reward. If far, give lower reward.
+    """
+    dist = distance_from_row_center(fill_bitmap, car_x, car_y)
+    if dist is None:
+        # Car might be off track => big penalty or zero reward
+        return -1.0
+
+    # Normalize distance by half-lane width
+    norm_dist = dist / max_lane_halfwidth  # e.g., 0 = center, 1 = near boundary
+    # Reward could be: R = 1 - norm_dist (bounded to [0, 1] if dist <= max_lane_halfwidth)
+    reward = max(0.0, 1.0 - norm_dist)
+    return reward
+
 
 
 ##################
@@ -590,6 +761,16 @@ def main():
     data = actor.sample(rand_bitmap)
     print(f"Action: \n {data[0]} \n")
     print(f"Log Prob: \n {data[1]} \n")
+
+    # reward = 0.0
+
+    # # 1. Collision angle penalty
+    # angle_pen = collision_angle_penalty(fill_bitmap, car_x, car_y)
+    # reward += angle_pen  # This is negative if collision
+
+    # # 2. Centerline reward
+    # center_r = centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50)
+    # reward += center_r  # Higher if near center, 0 or negative if off track
 
 # Run the main function.
 if __name__ == "__main__":
