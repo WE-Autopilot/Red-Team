@@ -10,12 +10,100 @@ import random
 import bisect
 import pickle
 import math
+
+
 ##############################
 ##     GYM ENVIRONOMENT     ##
 ##############################
 
 class SACF110Env(gym.Env):
-    print("Ben will do this")
+    """
+    A custom environment that:
+      - Wraps the f1tenth_gym environment (self.f110_env).
+      - On each step, interprets the 32D action as 16 local increments.
+      - Clamps angles, builds a path, picks the first vector, uses MPC to get (steering, speed).
+      - Steps the underlying environment and returns the new 256x256 LiDAR-based observation.
+    """
+
+    def __init__(self, f110_env: gym.Env):
+        """
+        :param f110_env: The underlying f1tenth environment instance.
+        """
+        super().__init__()
+        self.f110_env = f110_env
+
+        # Define observation space as a 256x256 grayscale image
+        self.observation_space = gym.spaces.Box(
+            low=0, high=255, shape=(256, 256), dtype=np.uint8
+        )
+
+        # Define action space as 32D => 16 (x,y) increments
+        self.action_space = gym.spaces.Box(
+            low=-1, high=1, shape=(32,), dtype=np.float32
+        )
+
+        # Additional placeholders for state tracking if needed
+        self.last_obs = None
+
+    def reset(self):
+        """
+        Resets the underlying f1tenth environment and returns a 256x256 LiDAR-based bitmap.
+        """
+        # Example: you might have a default pose
+        default_pose = np.array([[0.0, 0.0, 0.0]])
+        obs, reward, done, info = self.f110_env.reset(default_pose)
+
+        # Convert LiDAR to 256x256 bitmap
+        lidar_scan = obs['scans'][0]  # f110_gym typically has 'scans'
+        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256, 256))
+
+        self.last_obs = obs
+        return bitmap
+
+    def step(self, raw_action: np.ndarray):
+        """
+        Interprets the 32D action as 16 local increments, clamps angles, builds a path,
+        picks the first vector, uses MPC to compute [steering, speed], steps the simulator,
+        returns (bitmap, reward, done, info).
+        """
+
+        # 1) Convert raw_action => shape (16,2), clamp angles
+        increments = compute_vectors_with_angle_clamp(raw_action)  # shape (16,2)
+
+        # 2) Build a path in global coords. 
+        #    For simplicity, let's just take the FIRST vector as the target, ignoring the rest.
+        #    If you want to hold the entire path, you'd do more logic here.
+        car_x = self.last_obs['poses_x'][0]
+        car_y = self.last_obs['poses_y'][0]
+        car_theta = self.last_obs['poses_theta'][0]
+
+        # The first local increment is increments[0]. Suppose we rotate it by car_theta to get global coords:
+        dx_local, dy_local = increments[0]
+        # If you want to rotate to global:
+        global_dx = dx_local * np.cos(car_theta) - dy_local * np.sin(car_theta)
+        global_dy = dx_local * np.sin(car_theta) + dy_local * np.cos(car_theta)
+
+        target_x = car_x + global_dx
+        target_y = car_y + global_dy
+
+        # 3) Use the MPC_controller to get [steering, speed]
+        control = MPC_controller(target_x, target_y, car_x, car_y, car_theta)
+        # control is e.g. np.array([steering, speed])
+
+        # 4) Step the underlying environment
+        obs, base_reward, done, info = self.f110_env.step(np.array([control]))
+
+        # 5) Convert new LiDAR => new 256x256 observation
+        lidar_scan = obs['scans'][0]
+        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256, 256))
+
+        # 6) Compute a custom reward. 
+        #    For now, let's do base_reward minus collision penalty:
+        collision_penalty = -100.0 if done else 0.0
+        total_reward = base_reward + collision_penalty
+
+        self.last_obs = obs
+        return bitmap, total_reward, done, info
 
 
 ###########################################
@@ -568,7 +656,12 @@ def MPC_controller(target_x: float, target_y: float, car_x: float, car_y: float,
     :param car_theta: Current car heading in radians.
     :return: A 1D array [steering, speed] for the simulator step.
     """
-
+    desired_heading = np.arctan2(target_y - car_y, target_x - car_x)
+    steering = desired_heading - car_theta
+    steering = np.clip(steering, -1, 1)
+    speed = 4.0 * (1 - abs(steering))
+    speed = np.clip(speed, 0, 5.0)
+    return np.array([steering, speed])
 
 
 ##################
