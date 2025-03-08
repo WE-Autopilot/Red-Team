@@ -12,91 +12,235 @@ import pickle
 import math
 import cvxpy as cp
 from scipy.interpolate import CubicSpline
+from collections import deque
+from typing import List, Tuple, Union
+import time
+import pyglet
+from pyglet.gl import GL_LINES
 
 ##############################
 ##     GYM ENVIRONOMENT     ##
 ##############################
-
 class SACF110Env(gym.Env):
-    print("Ben will do this")
+    """
+    This environment builds a new path only once the car has physically reached
+    the previous path’s final point (i.e. within DIST_THRESHOLD).
+    
+    - The 32D action is interpreted as 16 local (x,y) increments.
+    - Angles between increments are clamped (±10°) to ensure a smooth path.
+    - A sub-index (0..15) tracks which waypoint is being pursued.
+    - If a new action is provided before the path is finished, it is stored as pending.
+    """
+    DIST_THRESHOLD = 0.2  # [meters] threshold to consider a waypoint reached
 
+    def __init__(self, f110_env: gym.Env):
+        super().__init__()
+        self.f110_env = f110_env
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(256,256), dtype=np.uint8)
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(32,), dtype=np.float32)
+        
+        self.car_length = 0.3
+        self.vector_length = 0.5
+        
+        self.path_points = None    # List of 16 (x,y) points (global coordinates)
+        self.sub_index = 16        # Forces a new path parse on first step
+        self.pending_action = None # Latest agent action waiting to be used
+
+        self.last_obs = None
+        self.prev_x = None
+        self.prev_y = None
+
+    def reset(self):
+        # Example starting pose: (0, 0) with 90° heading
+        default_pose = np.array([[0.0, 0.0, 1.57]])
+        obs, _, _, _ = self.f110_env.reset(default_pose)
+
+        lidar_scan = obs['scans'][0]
+        # Use FILL mode with a black background for the lidar bitmap
+        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
+                                 bg_color='black', draw_mode='FILL')
+        self.last_obs = obs
+        
+        self.prev_x = obs['poses_x'][0]
+        self.prev_y = obs['poses_y'][0]
+
+        # Force new path
+        self.path_points = None
+        self.sub_index = 16
+        self.pending_action = None
+
+        return bitmap
+
+    def step(self, raw_action: np.ndarray):
+        """
+        1) If the current path is finished and the car is near its final point,
+           parse pending_action (or raw_action) to build a new path.
+        2) If mid-path, store the latest action as pending without re-parsing.
+        3) Compute a steering & speed command (via MPC) to drive toward the current waypoint.
+        4) Advance the sub_index if the car is within DIST_THRESHOLD of the waypoint.
+        """
+        car_x = self.last_obs['poses_x'][0]
+        car_y = self.last_obs['poses_y'][0]
+        
+        if self.path_points is None:
+            self._parse_new_path(raw_action)
+        else:
+            if self.sub_index >= 16:
+                final_x, final_y = self.path_points[-1]
+                dist_to_final = np.hypot(final_x - car_x, final_y - car_y)
+                if dist_to_final < self.DIST_THRESHOLD:
+                    self._parse_new_path(raw_action)
+                else:
+                    self.pending_action = raw_action
+            else:
+                self.pending_action = raw_action
+
+        target_x, target_y = self.path_points[self.sub_index]
+        # Use the MPC controller (which computes steering and speed) for this step.
+        action_out = MPC_controller(
+            target_x, target_y,
+            car_x, car_y,
+            self.last_obs['poses_theta'][0]
+        )
+
+        obs, base_reward, done, info = self.f110_env.step(np.array([action_out]))
+
+        lidar_scan = obs['scans'][0]
+        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
+                                 bg_color='black', draw_mode='FILL')
+        
+        collision_penalty = -100.0 if done else 0.0
+        old_x, old_y = self.prev_x, self.prev_y
+        new_x = obs['poses_x'][0]
+        new_y = obs['poses_y'][0]
+        dist_traveled = np.sqrt((new_x - old_x)**2 + (new_y - old_y)**2)
+        self.prev_x, self.prev_y = new_x, new_y
+        
+        not_moving_penalty = -2.0 if dist_traveled < 0.001 else 0.0
+        progress_reward = dist_traveled * 10.0
+        
+        lap_completion_bonus = 0.0
+        if 'lap_time' in info and info['lap_time'] > 0:
+            lap_t = info['lap_time']
+            lap_completion_bonus = 500.0 - 10.0 * lap_t
+            done = True
+        
+        total_reward = (base_reward + progress_reward + lap_completion_bonus +
+                        not_moving_penalty - collision_penalty)
+
+        self.last_obs = obs
+
+        car_x2 = obs['poses_x'][0]
+        car_y2 = obs['poses_y'][0]
+        target_x2, target_y2 = self.path_points[self.sub_index]
+        dist_to_waypoint = np.hypot(target_x2 - car_x2, target_y2 - car_y2)
+        if dist_to_waypoint < self.DIST_THRESHOLD:
+            self.sub_index += 1
+
+        global current_planned_path
+        flattened = []
+        for px, py in self.path_points:
+            flattened.extend([px, py])
+        current_planned_path = np.array(flattened, dtype=np.float32)
+
+        return bitmap, total_reward, done, info
+
+    def _parse_new_path(self, raw_action: np.ndarray):
+        """
+        Parse the provided (or pending) 32D action into 16 local increments,
+        then compute a new global path based on the car's current pose.
+        """
+        if self.pending_action is not None:
+            action_to_use = self.pending_action
+            self.pending_action = None
+        else:
+            action_to_use = raw_action
+        
+        # Compute clamped vectors (each normalized to have unit length)
+        increments = compute_vectors_with_angle_clamp(action_to_use)
+
+        car_x = self.last_obs['poses_x'][0]
+        car_y = self.last_obs['poses_y'][0]
+        car_theta = self.last_obs['poses_theta'][0]
+
+        front_x = car_x + self.car_length * np.cos(car_theta)
+        front_y = car_y + self.car_length * np.sin(car_theta)
+
+        new_points = [(front_x, front_y)]
+        for i in range(16):
+            dx, dy = increments[i]
+            mag = np.sqrt(dx*dx + dy*dy) + 1e-8
+            dx_norm, dy_norm = dx/mag, dy/mag
+            dx_scaled = dx_norm * self.vector_length
+            dy_scaled = dy_norm * self.vector_length
+            
+            # Rotate the increment from local to global frame
+            global_dx = dx_scaled * np.cos(car_theta) - dy_scaled * np.sin(car_theta)
+            global_dy = dx_scaled * np.sin(car_theta) + dy_scaled * np.cos(car_theta)
+            
+            px, py = new_points[-1]
+            new_x = px + global_dx
+            new_y = py + global_dy
+            new_points.append((new_x, new_y))
+        
+        self.path_points = new_points[1:]
+        self.sub_index = 0
 
 ###########################################
 ##   LIDAR TO BITMAP, COURTESY OF ALY    ##
 ###########################################
-
 def _lidar_to_bitmap(
         scan: list[float],               
-        winding_dir: str='CCW',          
-        starting_angle: float=-np.pi/2,  
+        winding_dir: str = 'CCW',          
+        starting_angle: float = -np.pi/2,  
         max_scan_radius: float | None = None,
         scaling_factor: float | None = 10, 
         bg_color: str = 'white', 
-        draw_center: bool=True,  
-        output_image_dims: tuple[int]=(256, 256),
-        target_beam_count: int=600,
-        fov: float=2*np.pi,
-        draw_mode: str="POLYGON"
+        draw_center: bool = True,  
+        output_image_dims: tuple[int] = (256, 256),
+        target_beam_count: int = 600,
+        fov: float = 2*np.pi,
+        draw_mode: str = "FILL"
     ) -> np.ndarray:  
     """
-    Creates a bitmap image based on lidar input.
-    Assumes rays are equally spaced within the FOV.
-
+    Creates a bitmap image from lidar scan data.
+    Assumes rays are equally spaced over the field of view.
+    
     Args:
-        scan (list[float]): A list of lidar measurements.
-
-        winding_dir (str): The direction that the rays wind. Must either be CW or CCW in a right handed coord system.
+        scan (list[float]): List of lidar measurements.
+        winding_dir (str): Direction for the rays ('CW' or 'CCW').
+        starting_angle (float): Offset from the positive x-axis.
+        max_scan_radius (float | None): Maximum expected range; if provided, used for scaling.
+        scaling_factor (float | None): Scaling factor if max_scan_radius is not given.
+        bg_color (str): Background color, either 'white' or 'black'.
+        draw_center (bool): Whether to draw a center marker.
+        output_image_dims (tuple[int]): Dimensions (height, width) of the output image.
+        target_beam_count (int): Number of beams (rays) to be used.
+        fov (float): Field of view in radians.
+        draw_mode (str): 'RAYS', 'POLYGON', or 'FILL' mode for drawing.
         
-        starting_angle (float): The offset from the pos-x axis that points "up" or "forward.
-        
-        max_scan_radius (float | None): The maximum range expected from the scans. Used to scale the value into the image if given.
-        
-        scaling_factor (float | None): Scaling factor for the ranges from the scan.
-        
-        bg_color (str): Either \'white\' or \'black\'. The accent color is always the opposite.
-        
-        draw_center (bool): Should this function draw a square in the center of the bitmap?
-        
-        output_image_dims (tuple[int]): The dimensions of the output image. Should be square but not enforced.
-        
-        beam_dropout (float): How much of the scan to dropout. I.e., 0 means all beams are drawn, 0.3 means 30% of beams are dropped.
-        
-        fov (float): The field of view of the car measured in radians. Note: the output will look pinched if this is setup incorrectly.
-
-        draw_mode (str): How should the final image be drawn. Can be \'RAYS\' (view the ray casts - keep beam count low), \'POLYGON\' (draws the outline of the rays), or \'FILL\' (filled in driveable and nondriveable boundary). 
-
     Returns:
-        np.ndarray: A single-channel, grayscale image with a birds-eye-view of the lidar scan.
+        np.ndarray: A single-channel (grayscale) bitmap image.
     """
-    assert winding_dir in ['CW', 'CCW'], "winding_dir must be either clockwise or counterclockwise"
+    assert winding_dir in ['CW', 'CCW'], "winding_dir must be either CW or CCW"
     assert bg_color in ['black', 'white']
     assert draw_mode in ['RAYS', 'POLYGON', 'FILL']
-    assert len(output_image_dims) == 2
-    assert all([x > 0 for x in output_image_dims]), "output_image_dims must be at least 1x1"
+    assert len(output_image_dims) == 2 and all(x > 0 for x in output_image_dims)
     assert 0 < target_beam_count < len(scan)
     assert 0 < fov <= 2*np.pi, "FOV must be between 0 and 2pi"
 
     if max_scan_radius is not None:
         scaling_factor = min(output_image_dims) / max_scan_radius
     elif scaling_factor is None:
-        raise ValueError("Must provide either max_scan_radius or scaling_factor")
+        raise ValueError("Provide either max_scan_radius or scaling_factor")
+    
+    BG_COLOR, DRAW_COLOR = (0, 255) if bg_color == 'black' else (255, 0)
+    image = np.ones(output_image_dims, dtype=np.uint8) * BG_COLOR
+    direction = 1 if winding_dir == 'CCW' else -1
 
-    BG_COLOR, DRAW_COLOR = (0, 180) if bg_color == 'black' else (255, 20)
-
-    # Initialize a blank grayscale image for the output
-    image = np.ones((output_image_dims[0], output_image_dims[1]), dtype=np.uint8) * BG_COLOR
-
-    # Direction factor
-    dir = 1 if winding_dir == 'CCW' else -1
-
-    # Select target beam count using linspace for accurate downsampling
     indices = np.linspace(0, len(scan) - 1, target_beam_count, dtype=int)
     data = np.array(scan)[indices]
-
-    # Precompute angles
-    angles = starting_angle + dir * fov * np.linspace(0, 1, target_beam_count)
-
-    # Compute (x, y) positions in one step
+    angles = starting_angle + direction * fov * np.linspace(0, 1, target_beam_count)
     center = np.array([output_image_dims[0] // 2, output_image_dims[1] // 2])
     points = np.column_stack((
         np.rint(center[0] + scaling_factor * data * np.cos(angles)).astype(int),
@@ -112,449 +256,295 @@ def _lidar_to_bitmap(
             cv2.line(image, tuple(center), tuple(p), color=DRAW_COLOR, thickness=1)
             cv2.rectangle(image, tuple(p - 2), tuple(p + 2), color=DRAW_COLOR, thickness=-1)
 
-    # Draw center point
     if draw_center:
-        cv2.rectangle(image, tuple(center - 2), tuple(center + 2), color=BG_COLOR if draw_mode == "FILL" else DRAW_COLOR, thickness=-1)
+        cv2.rectangle(image, tuple(center - 2), tuple(center + 2),
+                      color=BG_COLOR if draw_mode == "FILL" else DRAW_COLOR, thickness=-1)
     
     return image
 
 def lidar_to_bitmap(
         scan: list[float],               
-        winding_dir: str='CCW',          
-        starting_angle: float=-np.pi/2,  
+        winding_dir: str = 'CCW',          
+        starting_angle: float = -np.pi/2,  
         max_scan_radius: float | None = None,
         scaling_factor: float | None = 10, 
         bg_color: str = 'white', 
-        draw_center: bool=True,  
-        output_image_dims: tuple[int]=(256, 256),
-        target_beam_count: int=600,
-        fov: float=2*np.pi,
-        draw_mode: str="POLYGON",
-        channels: int=1
+        draw_center: bool = True,  
+        output_image_dims: tuple[int] = (256, 256),
+        target_beam_count: int = 600,
+        fov: float = 2*np.pi,
+        draw_mode: str = "POLYGON",
+        channels: int = 1
     ) -> np.ndarray:  
     """
-    Creates a bitmap image based on lidar input.
-    Assumes rays are equally spaced within the FOV.
-
+    Wraps _lidar_to_bitmap to optionally convert the grayscale image
+    into a multi-channel image.
+    
     Args:
-        scan (list[float]): A list of lidar measurements.
-
-        winding_dir (str): The direction that the rays wind. Must either be CW or CCW in a right handed coord system.
-        
-        starting_angle (float): The offset from the pos-x axis that points "up" or "forward.
-        
-        max_scan_radius (float | None): The maximum range expected from the scans. Used to scale the value into the image if given.
-        
-        scaling_factor (float | None): Scaling factor for the ranges from the scan.
-        
-        bg_color (str): Either \'white\' or \'black\'. The accent color is always the opposite.
-        
-        draw_center (bool): Should this function draw a square in the center of the bitmap?
-        
-        output_image_dims (tuple[int]): The dimensions of the output image. Should be square but not enforced.
-        
-        beam_dropout (float): How much of the scan to dropout. I.e., 0 means all beams are drawn, 0.3 means 30% of beams are dropped.
-        
-        fov (float): The field of view of the car measured in radians. Note: the output will look pinched if this is setup incorrectly.
-
-        draw_mode (str): How should the final image be drawn. Can be \'RAYS\' (view the ray casts - keep beam count low), \'POLYGON\' (draws the outline of the rays), or \'FILL\' (filled in driveable and nondriveable boundary). 
-
+        (see _lidar_to_bitmap for other parameters)
+        channels (int): 1 (grayscale), 3 (RGB), or 4 (RGBA).
+    
     Returns:
-        np.ndarray: A single-channel, grayscale image with a birds-eye-view of the lidar scan.
+        np.ndarray: The lidar bitmap image.
     """
-    assert channels in [1, 3, 4], "channels must 1, 3, or 4"
-
-    grayscale_img = _lidar_to_bitmap(scan, winding_dir, starting_angle, max_scan_radius, scaling_factor, bg_color, draw_center, output_image_dims, target_beam_count, fov, draw_mode)
+    assert channels in [1, 3, 4], "channels must be 1, 3, or 4"
+    grayscale_img = _lidar_to_bitmap(scan, winding_dir, starting_angle,
+                                     max_scan_radius, scaling_factor, bg_color,
+                                     draw_center, output_image_dims,
+                                     target_beam_count, fov, draw_mode)
     if channels == 1:
-        return grayscale_img  # Shape: (256, 256)
+        return grayscale_img
     elif channels == 3:
-        return np.stack([grayscale_img] * 3, axis=-1)  # Shape: (256, 256, 3)
+        return np.stack([grayscale_img] * 3, axis=-1)
     elif channels == 4:
-        alpha_channel = np.full_like(grayscale_img, 255)  # Alpha is fully opaque (255)
-        return np.stack([grayscale_img, grayscale_img, grayscale_img, alpha_channel], axis=-1)  # Shape: (256, 256, 4)
+        alpha_channel = np.full_like(grayscale_img, 255)
+        return np.stack([grayscale_img, grayscale_img, grayscale_img, alpha_channel], axis=-1)
     else:
-        raise ValueError("Invalid number of channels. Supported: 1 (grayscale), 3 (RGB), 4 (RGBA)")
-
+        raise ValueError("Invalid number of channels. Supported: 1, 3, or 4.")
 
 ##############################
 ##        OPIUM MODEL       ##
 ##############################
-
-
 class Actor(nn.Module):
     """
-    Purpose: The Actor outputs a 32D continuous action (in [-1,1]) representing 16 local 2D increments.
-    It uses convolutional layers to process the 256×256 bitmap and outputs a value based on model performance.
+    The Actor outputs a 32D continuous action (in [-1,1]) representing 16 local (x,y) increments.
+    Processes the 256x256 lidar bitmap through convolutional layers.
     """
     def __init__(self, action_dim: int = 32):
-        """
-        Initializes the Actor network.
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=8, stride=4)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        self.fc1 = nn.Linear(64 * 28 * 28, 512)
+        self.fc_mean = nn.Linear(512, action_dim)
+        self.fc_log_std = nn.Linear(512, action_dim)
         
-        :param action_dim: The dimensionality of the action vector (e.g. 32).
-        """
-        # Initialize the data set.
-        super(Actor, self).__init__()
-
-        # Define convolutional layers to process the 256x256 bitmap.
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=8, stride=4, padding=3) # Output: (batch_size, 32, 64, 64)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1) # Output: (batch_size, 64, 32, 32)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1) # Output: (batch_size, 128, 16, 16)
-        
-        self.flatten = nn.Flatten() # Flatten the output into a 1D vector.
-
-        # Define a fully connected layer to output probability.
-        self.fc1 = nn.Linear(128 * 16 * 16, 512) # (batch_size, 512)
-        self.fc_mean = nn.Linear(512, action_dim) # (batch_size, action_dim)
-        self.fc_log_std = nn.Linear(512, action_dim) # (batch_size, action_dim)
-    
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Forward pass of the actor network.
-        
-        :param x: A (batch, 1, 256, 256) input tensor (the bitmap observation).
-        :return: (mean, log_std) for the Gaussian distribution over actions.
-        """
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
-        x = self.flatten(x)
+        x = x.view(x.size(0), -1)
         x = F.relu(self.fc1(x))
-        
         mean = self.fc_mean(x)
-        log_std = self.fc_log_std(x)
-
+        log_std = torch.clamp(self.fc_log_std(x), -20, 2)
         return mean, log_std
-
     
-    def sample(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Samples an action using the reparameterization trick.
-        
-        :param x: A (batch, 1, 256, 256) input tensor.
-        :return: (action, log_prob), where 'action' is in [-1,1]^action_dim,
-                 and 'log_prob' is the log probability of that action.
-        """
-        mean, log_std = self.forward(x) # Retrieve an action from the network.
-        std = torch.exp(0.5 * log_std) # Get the standard deviation.
-        eps = torch.randn_like(mean) # Random noise.
-        action = mean + std * eps # Take a sample from the distribution.
-        
-        # Calculate the log probability.
+    def sample(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        mean, log_std = self.forward(x)
+        std = log_std.exp()
         dist = torch.distributions.Normal(mean, std)
-        log_prob = dist.log_prob(action).sum(dim=-1) # Sum over all dimensions of the action.
+        x_t = dist.rsample()
+        y_t = torch.tanh(x_t)
+        log_prob = (dist.log_prob(x_t) - torch.log(1 - y_t.pow(2) + 1e-6)).sum(1, keepdim=True)
+        return y_t, log_prob
 
-        return action, log_prob
-    
 class Critic(nn.Module):
     """
-    Purpose: The Critic estimates the Q-value of a given state (the bitmap) and action (the 32D vector). 
-    It also uses convolutional layers for the state, then concatenates the action for a final Q-value estimate 
-        (Q-Values or Action-Values : These represent the expected rewards for taking an action in a specific state).
+    The Critic estimates the Q-value for a given state (bitmap) and action (32D vector).
     """
-    
-    def __init__(self, name,beta, checkPoint_dir="sac", action_dim: int = 32):
-        """
-        Initializes the Critic network.
-        
-        :param action_dim: Dimensionality of the action vector (e.g. 32).
-        :param name: name for model checkpointing
-        """
-        # the guy has:
-        # 1. the learning rate
-        # 2. dimensions of the environment (itd be 256 x 256 but we dont need this since its known)
-        # 3. dimensions of the fully connected layers also not needed we can just do within
-        # 4. name for model checkpointing which im going to add
-        # 5. checkpoint directory which im going to add 
-        super(Critic,self).__init__()
-        self.action_dim = action_dim
-        self.name = name
-        self.beta = beta
-        self.checkPoint_dir = checkPoint_dir
-        self.checkPoint_file = os.path.join(self.checkPoint_dir,name)
-
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=8, stride=4, padding=3) # Output: (batch_size, 32, 64, 64)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1) # Output: (batch_size, 64, 32, 32)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1) # Output: (batch_size, 128, 16, 16)
-        
-        self.flatten = nn.Flatten() # Flatten the output into a 1D vector.
-
-        # Define a fully connected layer to output probability.
-        self.fc1 = nn.Linear(128 * 16 * 16+action_dim, 256) #Evaluates value of state and action pair 
-        self.fc2 = nn.Linear(256,256)
-        self.q = nn.Linear(256,1)
-
-        self.optimizer = optim.Adam(self.parameters(),lr=beta)
+    def __init__(self, action_dim: int = 32):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=8, stride=4)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        self.fc1 = nn.Linear(64 * 28 * 28 + action_dim, 512)
+        self.fc2 = nn.Linear(512, 1)
     
     def forward(self, x: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass of the critic network, estimating Q-value.
-        
-        :param x: A (batch, 1, 256, 256) input tensor (the bitmap observation).
-        :param action: A (batch, action_dim) tensor of actions.
-        :return: A (batch, 1) tensor representing Q-values for state-action pairs.
-        """
-        state = F.relu(self.conv1(x))
-        state = F.relu(self.conv2(state))
-        state = F.relu(self.conv3(state))
-        state = self.flatten(state)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.view(x.size(0), -1)
+        x = torch.cat([x, action], dim=1)
+        x = F.relu(self.fc1(x))
+        return self.fc2(x)
 
-
-        action_value = self.fc1(torch.cat([state,action],dim = 1))
-        action_value = F.relu(action_value)
-        action_value = self.fc2(action_value)
-        action_value = F.relu(action_value)
-
-        q = self.q(action_value)
-
-        return q
-
-
-class Sample:
-    """
-    Wraps a transition for prioritized replay.
-    """
-    def __init__(self, state, action, reward, next_state, done):
-        self.state = state
-        self.action = action
-        self.reward = reward
-        self.next_state = next_state
-        self.done = done
-        self.weight = 1.0
-        self.cumulative_weight = 1.0
-
-    def is_interesting(self):
-        return self.done or self.reward != 0
-
-    def __lt__(self, other):
-        return self.cumulative_weight < other.cumulative_weight
-    
+##############################
+##      REPLAY BUFFER       ##
+##############################
 class ReplayBuffer:
     """
-    Purpose: The ReplayBuffer stores (state, action, reward, next_state, done) tuples for off-policy RL. 
-    It supports pushing new transitions and sampling random batches for training.
+    Stores (state, action, reward, next_state, done) tuples for off-policy RL.
     """
-    def __init__(self, capacity: int = 1000000, prioritized_replay: bool = False, base_output_dir: str = "."):
-        self.capacity = capacity
-        self.buffer = []
-        self.position = 0
-        self.prioritized_replay = prioritized_replay
-
-        # For prioritized replay
-        self.num_interesting_samples = 0
-        self.batches_drawn = 0
-
-        # Optionally set up saving directory
-        self.save_buffer_dir = os.path.join(base_output_dir, "models")
-        if not os.path.isdir(self.save_buffer_dir):
-            os.makedirs(self.save_buffer_dir)
-        self.file = "replay_buffer.dat"
-        """
-        Constructs a replay buffer for storing transitions.
-        
-        :param capacity: Maximum number of transitions to store.
-        """
+    def __init__(self, capacity: int = 1000000):
+        self.buffer = deque(maxlen=capacity)
     
     def push(self, s: np.ndarray, a: np.ndarray, r: float, ns: np.ndarray, d: bool):
-        if self.prioritized_replay:
-            sample = Sample(s, a, r, ns, d)
-        else:
-            sample = (s, a, r, ns, d)
-
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(sample)
-        else:
-            self.buffer[self.position] = sample
-        
-        if self.prioritized_replay:
-            self._update_weights()
-        self.position = (self.position + 1) % self.capacity
-        """
-        Adds a transition to the replay buffer.
-        
-        :param s: State (observation) array.
-        :param a: Action array.
-        :param r: Reward (float).
-        :param ns: Next state (observation) array.
-        :param d: Done flag (boolean).
-        """
+        self.buffer.append((s, a, r, ns, d))
     
     def sample(self, batch_size: int):
-        if batch_size > len(self.buffer):
-            raise IndexError(f"Not enough samples ({len(self.buffer)}) to draw a batch of {batch_size}")
-
-        if self.prioritized_replay:
-            self.batches_drawn += 1
-            return self._draw_prioritized_batch(batch_size)
-        else:
-            sample_indices = np.random.choice(len(self.buffer), batch_size, replace=False)
-            batch = [self.buffer[i] for i in sample_indices]
-            states, actions, rewards, next_states, dones = map(np.stack, zip(*batch))
-            return states, actions, rewards, next_states, dones
-        """
-        Samples a batch of transitions from the buffer.
-        
-        :param batch_size: Number of transitions to sample.
-        :return: (states, actions, rewards, next_states, dones) as stacked arrays.
-        """
+        batch = random.sample(self.buffer, batch_size)
+        s, a, r, ns, d = map(np.stack, zip(*batch))
+        return s, a, r, ns, d
     
     def __len__(self) -> int:
         return len(self.buffer)
-        """
-        :return: Current number of transitions in the buffer.
-        """
-    def save(self):
-        with open(os.path.join(self.save_buffer_dir, self.file), "wb") as f:
-            pickle.dump(self.buffer, f)
 
-    def load(self, file):
-        with open(file, "rb") as f:
-            self.buffer = pickle.load(f)
-
-    def _truncate_list_if_necessary(self):
-        # Truncate the buffer if it exceeds 105% of capacity.
-        if len(self.buffer) > self.capacity * 1.05:
-            if self.prioritized_replay:
-                truncated_weight = 0
-                for i in range(self.capacity, len(self.buffer)):
-                    truncated_weight += self.buffer[i].weight
-                    if self.buffer[i].is_interesting():
-                        self.num_interesting_samples -= 1
-            self.buffer = self.buffer[-self.capacity:]
-            if self.prioritized_replay:
-                for sample in self.buffer:
-                    sample.cumulative_weight -= truncated_weight
-
-    def _draw_prioritized_batch(self, batch_size: int):
-        # Assumes self.buffer is sorted by cumulative_weight
-        batch = []
-        probe = Sample(None, 0, 0, None, False)
-        while len(batch) < batch_size:
-            # Choose a random number between 0 and the last sample's cumulative weight
-            probe.cumulative_weight = random.uniform(0, self.buffer[-1].cumulative_weight)
-            index = bisect.bisect_right(self.buffer, probe)
-            sample = self.buffer[index]
-            # Decay the sample's weight slightly
-            sample.weight = max(1.0, 0.8 * sample.weight)
-            if sample not in batch:
-                batch.append(sample)
-        if self.batches_drawn % 100 == 0:
-            cumulative = 0
-            for sample in self.buffer:
-                cumulative += sample.weight
-                sample.cumulative_weight = cumulative
-        # Convert Sample objects into tuples for consistency with training code
-        batch_tuples = [(s.state, s.action, s.reward, s.next_state, s.done) for s in batch]
-        states, actions, rewards, next_states, dones = map(np.stack, zip(*batch_tuples))
-        return states, actions, rewards, next_states, dones
-
-
-    def _update_weights(self):
-        if len(self.buffer) > 1:
-            last_sample = self.buffer[-1]
-            last_sample.cumulative_weight = last_sample.weight + self.buffer[-2].cumulative_weight
-
-        if self.buffer[-1].is_interesting():
-            self.num_interesting_samples += 1
-            # Boost neighboring samples; number depends on frequency of "interesting" samples
-            uninteresting_range = max(1, len(self.buffer) / max(1, self.num_interesting_samples))
-            uninteresting_range = int(uninteresting_range)
-            for i in range(uninteresting_range, 0, -1):
-                index = len(self.buffer) - i
-                if index < 1:
-                    break
-                boost = 1.0 + 3.0 / math.exp(i / (uninteresting_range / 6.0))
-                self.buffer[index].weight *= boost
-                self.buffer[index].cumulative_weight = self.buffer[index].weight + self.buffer[index - 1].cumulative_weight
-
+##############################
+##        SAC AGENT         ##
+##############################
 class SACAgent:
-    def __init__(self, device: torch.device, action_dim: int = 32, gamma: float = 0.99, tau: float = 0.005, alpha: float = 0.2, actor_lr: float = 3e-4, critic_lr: float = 3e-4):
-        """
-        Initializes the Soft Actor-Critic agent.
+    """
+    Soft Actor-Critic agent for continuous control.
+    
+    Attributes:
+        device: Torch device.
+        actor: The policy network.
+        critic1, critic2: The Q-value estimation networks.
+        Target networks for critics (for soft updates).
+    """
+    def __init__(self, device: torch.device, action_dim: int = 32, gamma: float = 0.99,
+                 tau: float = 0.005, alpha: float = 0.2, actor_lr: float = 3e-4,
+                 critic_lr: float = 3e-4):
+        self.device = device
+        self.gamma = gamma
+        self.tau = tau
+        self.alpha = alpha
         
-        :param device: Torch device (CPU or CUDA).
-        :param action_dim: Dimensionality of the action vector (e.g. 32).
-        :param gamma: Discount factor.
-        :param tau: Soft update coefficient for target critics.
-        :param alpha: Entropy temperature (entropy regularization).
-        :param actor_lr: Learning rate for the actor.
-        :param critic_lr: Learning rate for the critics.
-        """
-
+        self.actor = Actor(action_dim).to(device)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_lr)
+        
+        self.critic1 = Critic(action_dim).to(device)
+        self.critic2 = Critic(action_dim).to(device)
+        self.critic1_optimizer = optim.Adam(self.critic1.parameters(), lr=critic_lr)
+        self.critic2_optimizer = optim.Adam(self.critic2.parameters(), lr=critic_lr)
+        
+        self.critic1_target = Critic(action_dim).to(device)
+        self.critic2_target = Critic(action_dim).to(device)
+        self.critic1_target.load_state_dict(self.critic1.state_dict())
+        self.critic2_target.load_state_dict(self.critic2.state_dict())
+    
     def select_action(self, state: np.ndarray, evaluate: bool = False) -> np.ndarray:
         """
-        Selects an action from the current policy.
+        Select an action given the current state.
         
-        :param state: A 2D (256,256) or 3D (1,256,256) array representing the observation.
-        :param evaluate: If True, use the mean action (deterministic); else sample stochastically.
-        :return: A 1D array of shape (action_dim,) in [-1,1].
+        Args:
+            state (np.ndarray): Observation (expected shape: 256x256 or similar).
+            evaluate (bool): If True, choose the mean (deterministic) action.
+            
+        Returns:
+            np.ndarray: A 1D action vector (length 32).
         """
-
-    def update(self, replay_buffer: 'ReplayBuffer', batch_size: int = 64) -> Tuple[float, float, float]:
+        st = torch.FloatTensor(state).unsqueeze(0).unsqueeze(0).to(self.device)
+        if evaluate:
+            with torch.no_grad():
+                mean, _ = self.actor.forward(st)
+                act = torch.tanh(mean)
+                return act.cpu().numpy().flatten()
+        else:
+            with torch.no_grad():
+                act, _ = self.actor.sample(st)
+                return act.cpu().numpy().flatten()
+    
+    def update(self, replay_buffer: ReplayBuffer, batch_size: int = 64) -> Tuple[float, float, float]:
         """
-        Performs one SAC update step (actor + critics).
+        Performs a SAC update (both actor and critics).
         
-        :param replay_buffer: The ReplayBuffer containing transitions.
-        :param batch_size: Number of transitions to sample for the update.
-        :return: (actor_loss, critic1_loss, critic2_loss) as floats.
+        Args:
+            replay_buffer (ReplayBuffer): Buffer to sample transitions from.
+            batch_size (int): Number of samples per update.
+            
+        Returns:
+            Tuple containing (actor_loss, critic1_loss, critic2_loss).
         """
+        if len(replay_buffer) < batch_size:
+            return 0, 0, 0
+        
+        s, a, r, ns, d = replay_buffer.sample(batch_size)
+        s = torch.FloatTensor(s).to(self.device)
+        if len(s.shape) == 3: s = s.unsqueeze(1)
+        ns = torch.FloatTensor(ns).to(self.device)
+        if len(ns.shape) == 3: ns = ns.unsqueeze(1)
+        a = torch.FloatTensor(a).to(self.device)
+        r = torch.FloatTensor(r).unsqueeze(1).to(self.device)
+        d = torch.FloatTensor(np.float32(d)).unsqueeze(1).to(self.device)
+        
+        with torch.no_grad():
+            next_a, next_logp = self.actor.sample(ns)
+            tq1 = self.critic1_target(ns, next_a)
+            tq2 = self.critic2_target(ns, next_a)
+            tq = torch.min(tq1, tq2) - self.alpha * next_logp
+            tv = r + (1 - d) * self.gamma * tq
+        
+        cq1 = self.critic1(s, a)
+        cq2 = self.critic2(s, a)
+        c1_loss = F.mse_loss(cq1, tv)
+        c2_loss = F.mse_loss(cq2, tv)
+        
+        self.critic1_optimizer.zero_grad()
+        c1_loss.backward()
+        self.critic1_optimizer.step()
+        
+        self.critic2_optimizer.zero_grad()
+        c2_loss.backward()
+        self.critic2_optimizer.step()
+        
+        new_a, logp = self.actor.sample(s)
+        q1n = self.critic1(s, new_a)
+        q2n = self.critic2(s, new_a)
+        qn = torch.min(q1n, q2n)
+        a_loss = (self.alpha * logp - qn).mean()
+        
+        self.actor_optimizer.zero_grad()
+        a_loss.backward()
+        self.actor_optimizer.step()
+        
+        # Soft update target networks
+        for tp, p in zip(self.critic1_target.parameters(), self.critic1.parameters()):
+            tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
+        for tp, p in zip(self.critic2_target.parameters(), self.critic2.parameters()):
+            tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
+        
+        return a_loss.item(), c1_loss.item(), c2_loss.item()
 
-
+#######################################
+## PATH CLAMP & MPC HELPER FUNCTIONS ##
+#######################################
 def clamp_vector_angle_diff(prev_angle: float, desired_angle: float, max_diff_deg: float = 10.0) -> float:
     """
-    Purpose: Ensures consecutive vectors differ by at most ±10° (or another chosen angle). Helps keep the path smooth.
+    Ensures consecutive vectors differ by at most ±10° (or the given max_diff_deg).
     
-    :param prev_angle: The angle of the previous vector (radians).
-    :param desired_angle: The angle of the current vector (radians).
-    :param max_diff_deg: Maximum allowed deviation in degrees.
-    :return: The clamped angle in radians.
+    Args:
+        prev_angle (float): Previous vector’s angle (radians).
+        desired_angle (float): Desired current angle (radians).
+        max_diff_deg (float): Maximum allowed deviation in degrees.
+        
+    Returns:
+        float: The clamped angle (radians).
     """
-
-    max_diff_rad = np.radians(max_diff_deg) # Converts degrees to radians
-    angle_diff = desired_angle - prev_angle # Gets the difference between the desired and the previous angles
-
-    #Ensures angle differences stay within [-π, π] to prevent large jumps when crossing ±180°.
+    max_diff_rad = np.radians(max_diff_deg)
     angle_diff = (desired_angle - prev_angle + np.pi) % (2 * np.pi) - np.pi
-
-    # If the angle difference is greater than EX: 10 degrees, then clamp
     if angle_diff > max_diff_rad:
         return prev_angle + max_diff_rad
-    elif angle_diff < - max_diff_rad:
+    elif angle_diff < -max_diff_rad:
         return prev_angle - max_diff_rad
-    
-    return desired_angle # if it is within the limit (ex:10 degree) that keep it as it is (ex: 5 degrees)
+    return desired_angle
 
 def compute_vectors_with_angle_clamp(raw_action: np.ndarray, max_diff_deg: float = 10.0) -> np.ndarray:
     """
-    Interprets 'raw_action' (shape=(32,)) as 16 increments in [-1,1]^2,
-    forcing the first vector to be (1,0) and clamping subsequent angles ±10°.
+    Interprets a 32D raw action as 16 local (x,y) increments,
+    forcing the first vector to be (1,0) and clamping subsequent angles.
     
-    :param raw_action: A 1D array of length 32 (16 x 2).
-    :return: A (16,2) array of clamped increments in [-1,1].
+    Args:
+        raw_action (np.ndarray): 1D array of length 32.
+        max_diff_deg (float): Maximum angle change between successive vectors.
+        
+    Returns:
+        np.ndarray: (16, 2) array of clamped, normalized increments.
     """
     assert raw_action.shape == (32,), "Raw action must be a 32D vector (16 x 2D movements)."
-
-    # Reshape the action vector into 16 movement vectors of (x, y)
     vectors = raw_action.reshape(16, 2)
-
-    # Normalize each (x, y) vector to have unit length (ensuring direction is preserved)
     vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-
-    # It creates an output array for clamped movement vectors
     clamped_vectors = np.zeros_like(vectors)
-
-    # First movement vector is fixed to (1,0) for consistent direction
-    clamped_vectors[0] = [1, 0]  
-    prev_angle = np.arctan2(clamped_vectors[0][1], clamped_vectors[0][0])  # Get initial angle
-
+    clamped_vectors[0] = [1, 0]
+    prev_angle = np.arctan2(clamped_vectors[0][1], clamped_vectors[0][0])
     for i in range(1, 16):
-        desired_angle = np.arctan2(vectors[i][1], vectors[i][0])  # It creates the desired angle
-        clamped_angle = clamp_vector_angle_diff(prev_angle, desired_angle, max_diff_deg)  # This is the Clamp angle
-
-        # Converts the clamped angle back to (x, y)
+        desired_angle = np.arctan2(vectors[i][1], vectors[i][0])
+        clamped_angle = clamp_vector_angle_diff(prev_angle, desired_angle, max_diff_deg)
         clamped_vectors[i] = [np.cos(clamped_angle), np.sin(clamped_angle)]
-        prev_angle = clamped_angle  # This update the previous angle
-
+        prev_angle = clamped_angle
     return clamped_vectors
+
 
 ############################
 ##     MPC CONTROLLER     ##
@@ -719,26 +709,94 @@ def MPC_converter(x_accel: float, y_accel: float, current_speed: float, current_
     
     return np.array([final_steer, thrust])
 
-##################
-##     MAIN     ##
-##################
+##############################
+##  DISPLAYING EVERYTHING   ##
+##############################
+arrow_graphics = []
+current_planned_path = None
+
+def render_arrow(env_renderer, flattened_path: np.ndarray):
+    """
+    Renders arrows along the planned path for visualization.
+    
+    Args:
+        env_renderer: The environment renderer (expects a pyglet batch).
+        flattened_path (np.ndarray): Flattened array of path points.
+    """
+    global arrow_graphics
+    for arrow in arrow_graphics:
+        arrow.delete()
+    arrow_graphics = []
+    
+    points = flattened_path.reshape(-1, 2)
+    scale = 50.0
+    for i in range(len(points) - 1):
+        x0, y0 = points[i]
+        x1, y1 = points[i + 1]
+        arrow = env_renderer.batch.add(
+            2, GL_LINES, None,
+            ('v2f', (x0 * scale, y0 * scale, x1 * scale, y1 * scale)),
+            ('c3B', (0, 255, 0, 0, 255, 0))
+        )
+        arrow_graphics.append(arrow)
+
+def render_callback(env_renderer):
+    """
+    Callback for the simulator renderer to display the planned path.
+    """
+    global current_planned_path
+    if current_planned_path is not None:
+        render_arrow(env_renderer, current_planned_path)
+
+        
+##############################
+##      MAIN TRAINING LOOP  ##
+##############################
 def main():
-    # Make a random 256x256 bitmap.
-    rand_bitmap = torch.rand(1, 1, 256, 256) # Batch size of 1, 1 channel, 256x256 size.
-    rand_bitmap = torch.round(rand_bitmap) # Make it binary (0 or 1).
-    print(f"Random Bitmap: \n {rand_bitmap} \n") # Print random bitmap.
-
-    # Create the Actor instance and send it to the device (CPU or GPU).
-    actor = Actor(32)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    actor = actor.to(device)
-    rand_bitmap = rand_bitmap.to(device)
 
-    # Return a sample of an action from the Actor network.
-    data = actor.sample(rand_bitmap)
-    print(f"Action: \n {data[0]} \n")
-    print(f"Log Prob: \n {data[1]} \n")
+    f110_env = gym.make('f110_gym:f110-v0', map='example_map', map_ext='.png',
+                        num_agents=1, timestep=0.015)
+    f110_env.add_render_callback(render_callback)
+    
+    env = SACF110Env(f110_env)
+    agent = SACAgent(device, action_dim=32)
+    replay_buffer = ReplayBuffer()
+    
+    max_episodes = 1000
+    max_steps = 2000
+    batch_size = 64
+    update_after = 1000
+    update_every = 50
+    
+    total_steps = 0
+    for ep in range(max_episodes):
+        obs = env.reset()
+        ep_reward = 0
+        for st in range(max_steps):
+            action = agent.select_action(obs)
+            next_obs, reward, done, info = env.step(action)
+            
+            replay_buffer.push(obs, action, reward, next_obs, done)
+            obs = next_obs
+            ep_reward += reward
+            total_steps += 1
+            
+            f110_env.render("human")
+            cv2.imshow("LiDAR Bitmap", obs)
+            cv2.waitKey(1)
+            
+            if total_steps > update_after and total_steps % update_every == 0:
+                a_loss, c1_loss, c2_loss = agent.update(replay_buffer, batch_size)
+                print(f"Step {total_steps}: Actor={a_loss:.4f}, Critic1={c1_loss:.4f}, Critic2={c2_loss:.4f}")
+            
+            if done:
+                break
+        print(f"Episode {ep} Reward={ep_reward:.2f}")
+    
+    torch.save(agent.actor.state_dict(), "sac_actor.pth")
+    cv2.destroyAllWindows()
+    print("Training complete, model saved as sac_actor.pth")
 
-# Run the main function.
 if __name__ == "__main__":
     main()
