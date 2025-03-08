@@ -105,7 +105,7 @@ $$M[k+1] = A = \begin{bmatrix} 1&0&dt&0\\\0&1&0&dt\\\0&0&1&0\\\ 0&0&0&1 \end{bma
 
 ## MPC Cost Function Weights:
 The three things we have defined are State Cost, Input/Control Cost, & Terminal Cost.<br><br>
-State Cost refers to mistakes made in our position and speed. If you see the code, we have defined stateError as a diagonal matrix [1, 1, 0.25, 0.25]. The first 2 values penalie mistakes in position, the last 2 penalize mistakes in velocity (notice how we care more about where we re as opposed to how fast we are), these penalty weights can be changed differently, and they will effect how are car reacts to mistakes moving forward.<br><br>
+State Cost refers to mistakes made in our position and speed. If you see the code, we have defined stateError as a diagonal matrix [1, 1, 0.25, 0.25]. The first 2 values penalize mistakes in position, the last 2 penalize mistakes in velocity (notice how we care more about where we re as opposed to how fast we are), these penalty weights can be changed differently, and they will effect how are car reacts to mistakes moving forward.<br><br>
 Input Cost refers to mistakes made in acceleration, which are not weighed nearly as much as position or velocity, as of now, our diagonal matrix consists of [0.01, 0.01], emphasizing that they aren't penalized as much
 <br><br>
 Terminal Cost is a cost applied to the end of the horizon. It is a little more complicated and not relevant as of now, so we will set Terminal Cost to be equal to State Cost for the time being, as it does not involve the input cost whatsoever!
