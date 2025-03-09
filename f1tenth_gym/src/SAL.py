@@ -709,7 +709,6 @@ def MPC_converter(x_accel: float, y_accel: float, current_speed: float, current_
     
     return np.array([final_steer, thrust])
 
-<<<<<<< HEAD
 def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=1):
     """
     Detects if the car is about to collide with an obstacle.
@@ -881,13 +880,11 @@ def centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50):
     reward = max(0.0, 1.0 - norm_dist)
     return reward
 
-=======
 ##############################
 ##  DISPLAYING EVERYTHING   ##
 ##############################
 arrow_graphics = []
 current_planned_path = None
->>>>>>> dev
 
 def render_arrow(env_renderer, flattened_path: np.ndarray):
     """
@@ -902,7 +899,7 @@ def render_arrow(env_renderer, flattened_path: np.ndarray):
         arrow.delete()
     arrow_graphics = []
     
-    points = flattened_path.reshape(-1, 2)
+    points = flattened_path.reshape(-1, 2)[:8] # selecing only the first 8 vectors to generate a path
     scale = 50.0
     for i in range(len(points) - 1):
         x0, y0 = points[i]
@@ -972,19 +969,5 @@ def main():
     cv2.destroyAllWindows()
     print("Training complete, model saved as sac_actor.pth")
 
-<<<<<<< HEAD
-    # reward = 0.0
-
-    # # 1. Collision angle penalty
-    # angle_pen = collision_angle_penalty(fill_bitmap, car_x, car_y)
-    # reward += angle_pen  # This is negative if collision
-
-    # # 2. Centerline reward
-    # center_r = centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50)
-    # reward += center_r  # Higher if near center, 0 or negative if off track
-
-# Run the main function.
-=======
->>>>>>> dev
 if __name__ == "__main__":
     main()
