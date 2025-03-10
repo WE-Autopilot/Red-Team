@@ -157,7 +157,6 @@ class SACF110Env(gym.Env):
         for px, py in self.path_points:
             flattened.extend([px, py])
         current_planned_path = np.array(flattened, dtype=np.float32)
-        print(f"Total Reward: {total_reward}")
 
         return bitmap, total_reward, done, info
 
