@@ -52,13 +52,17 @@ class SACF110Env(gym.Env):
 
     def reset(self):
         # Example starting pose: (0, 0) with 90° heading
-        default_pose = np.array([[0.0, 0.0, 1.57]])
+        default_pose = np.array([[0.0, 0.0, np.pi/2]])
         obs, _, _, _ = self.f110_env.reset(default_pose)
 
         lidar_scan = obs['scans'][0]
         # Use FILL mode with a black background for the lidar bitmap
-        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
-                                 bg_color='black', draw_mode='FILL')
+        bitmap = lidar_to_bitmap(lidar_scan, fov=2*np.pi, output_image_dims=(256,256),
+                                 bg_color='black', draw_mode='FILL', channels=1)
+        
+        # Flip the bitmap vertically
+        bitmap = np.flipud(bitmap).copy()
+
         self.last_obs = obs
         
         self.prev_x = obs['poses_x'][0]
@@ -106,10 +110,12 @@ class SACF110Env(gym.Env):
         obs, base_reward, done, info = self.f110_env.step(np.array([action_out]))
 
         lidar_scan = obs['scans'][0]
-        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
-                                 bg_color='black', draw_mode='FILL')
-        
-        collision_penalty = -100.0 if done else 0.0
+        bitmap = lidar_to_bitmap(lidar_scan, fov=2*np.pi ,output_image_dims=(256,256),
+                                 bg_color='white', draw_mode='FILL', channels=1)
+        # Flip the bitmap vertically
+        bitmap = np.flipud(bitmap).copy()
+
+
         old_x, old_y = self.prev_x, self.prev_y
         new_x = obs['poses_x'][0]
         new_y = obs['poses_y'][0]
@@ -124,9 +130,20 @@ class SACF110Env(gym.Env):
             lap_t = info['lap_time']
             lap_completion_bonus = 500.0 - 10.0 * lap_t
             done = True
+
+        # Calculate additional rewards and penalties
+        center = np.array([bitmap.shape[1] // 2, bitmap.shape[0] // 2])
+        car_x_centered = center[0]
+        car_y_centered = center[1]-1
+        angle_pen = collision_angle_penalty(bitmap, car_x_centered, car_y_centered) if done else 0.0
+        center_r = centerline_reward(bitmap, car_x_centered, car_y_centered, max_lane_halfwidth=50)
+        
         
         total_reward = (base_reward + progress_reward + lap_completion_bonus +
-                        not_moving_penalty - collision_penalty)
+                        not_moving_penalty + angle_pen + center_r)
+        if angle_pen != 0:
+            print(f"angle_pen= {angle_pen}, center_r = {center_r}")
+            done = True   # End episode on collision    
 
         self.last_obs = obs
 
@@ -709,8 +726,7 @@ def MPC_converter(x_accel: float, y_accel: float, current_speed: float, current_
     
     return np.array([final_steer, thrust])
 
-<<<<<<< HEAD
-def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=1):
+def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=3):
     """
     Detects if the car is about to collide with an obstacle.
     
@@ -725,7 +741,7 @@ def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=1):
     for dy in range(-neighborhood_check, neighborhood_check+1):
         for dx in range(-neighborhood_check, neighborhood_check+1):
             # Skip the car's exact center pixel
-            if dx == 0 and dy == 0:
+            if -3<dx<3 and -3<dy<3:
                 continue
 
             nx = car_x + dx
@@ -755,10 +771,10 @@ def get_wall_normal(fill_bitmap, car_x, car_y, region=10):
 
     # 3. Gather gradient vectors at edges near (cx, cy)
     h, w = fill_bitmap.shape
-    x0 = max(0, car_x - region)
-    x1 = min(w, car_x + region + 1)
-    y0 = max(0, car_y - region)
-    y1 = min(h, car_y + region + 1)
+    x0 = max(0, car_x - region - 2)
+    x1 = min(w, car_x + region + 3)
+    y0 = max(0, car_y - region - 2)
+    y1 = min(h, car_y + region + 3)
 
     grad_vectors = []
     for y in range(y0, y1):
@@ -783,7 +799,7 @@ def get_wall_normal(fill_bitmap, car_x, car_y, region=10):
     # By default, the gradient points from darker to brighter.
     # If your "normal" should point inward or outward, you might flip or rotate:
     # For example, normal = mean_grad, or normal = -mean_grad, etc.
-    normal = mean_grad
+    normal = -mean_grad
 
     return normal
 
@@ -817,9 +833,10 @@ def collision_angle_penalty(fill_bitmap, car_x, car_y):
         return 0.0  # No collision => no penalty
 
     wall_normal = get_wall_normal(fill_bitmap, car_x, car_y)
-    angle_deg = compute_collision_angle(wall_normal)
+    angle_deg = 90 - compute_collision_angle(wall_normal)
+    print(f"Collision angle: {angle_deg} degrees")
     # Map angle to penalty
-    penalty = np.interp(abs(angle_deg), [0, 90], [0.1, 1.0])
+    penalty = np.interp(abs(angle_deg), [0, 90], [0.1, 10000.0])
     reward_delta -= penalty
     return reward_delta
 
@@ -840,15 +857,15 @@ def distance_from_row_center(fill_bitmap, car_x, car_y):
         return None  # Car is out of bounds
 
     # 1. Find left boundary
-    left_edge = car_x
-    while left_edge >= 0 and fill_bitmap[car_y, left_edge] == 255:
+    left_edge = car_x - 3
+    while left_edge >= 0 and fill_bitmap[car_y, left_edge] == 0:
         left_edge -= 1
     # Move one pixel into white area
     left_edge += 1
 
     # 2. Find right boundary
-    right_edge = car_x
-    while right_edge < w and fill_bitmap[car_y, right_edge] == 255:
+    right_edge = car_x + 3
+    while right_edge < w and fill_bitmap[car_y, right_edge] == 0:
         right_edge += 1
     # Move one pixel into white area
     right_edge -= 1
@@ -860,10 +877,14 @@ def distance_from_row_center(fill_bitmap, car_x, car_y):
 
     # 3. Midpoint
     midpoint = (left_edge + right_edge) / 2.0
+    half_width = ((right_edge - left_edge) / 2.0) - 2;
+
     # 4. Distance from center
     dist = abs(car_x - midpoint)
+    norm_dist = dist / half_width
+    # print(f"Normal Distance from center: {norm_dist:.2f} pixels")
     # 5. Return distance
-    return dist
+    return norm_dist
 
 def centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50):
     """
@@ -876,18 +897,16 @@ def centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50):
         return -1.0
 
     # Normalize distance by half-lane width
-    norm_dist = dist / max_lane_halfwidth  # e.g., 0 = center, 1 = near boundary
+    norm_dist = dist  # e.g., 0 = center, 1 = near boundary
     # Reward could be: R = 1 - norm_dist (bounded to [0, 1] if dist <= max_lane_halfwidth)
     reward = max(0.0, 1.0 - norm_dist)
     return reward
 
-=======
 ##############################
 ##  DISPLAYING EVERYTHING   ##
 ##############################
 arrow_graphics = []
 current_planned_path = None
->>>>>>> dev
 
 def render_arrow(env_renderer, flattened_path: np.ndarray):
     """
@@ -955,6 +974,7 @@ def main():
             obs = next_obs
             ep_reward += reward
             total_steps += 1
+            print(f"Episode {ep} Reward={ep_reward:.2f}")
             
             f110_env.render("human")
             cv2.imshow("LiDAR Bitmap", obs)
@@ -967,12 +987,12 @@ def main():
             if done:
                 break
         print(f"Episode {ep} Reward={ep_reward:.2f}")
+        
     
     torch.save(agent.actor.state_dict(), "sac_actor.pth")
     cv2.destroyAllWindows()
     print("Training complete, model saved as sac_actor.pth")
 
-<<<<<<< HEAD
     # reward = 0.0
 
     # # 1. Collision angle penalty
@@ -984,7 +1004,5 @@ def main():
     # reward += center_r  # Higher if near center, 0 or negative if off track
 
 # Run the main function.
-=======
->>>>>>> dev
 if __name__ == "__main__":
     main()
