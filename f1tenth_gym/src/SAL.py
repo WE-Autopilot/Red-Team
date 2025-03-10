@@ -114,14 +114,6 @@ class SACF110Env(gym.Env):
         bitmap = np.flipud(bitmap).copy()
 
 
-        # Access pixel values
-        # for y in range(bitmap.shape[0]):
-        #     for x in range(bitmap.shape[1]):
-        #         if(124<x<132 and 120<y<136):
-        #             print(f"Pixel value at ({y}, {x}): {bitmap[y, x]}")
-        # print(f"bitmap[0,0] = {bitmap[0,0]}")
-        
-        # collision_penalty = -100.0 if done else 0.0
         old_x, old_y = self.prev_x, self.prev_y
         new_x = obs['poses_x'][0]
         new_y = obs['poses_y'][0]
