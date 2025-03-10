@@ -18,173 +18,255 @@ import time
 import pyglet
 from pyglet.gl import GL_LINES
 
+# Global variables for rendering callbacks
+arrow_graphics = []
+current_planned_path = None
+
+
 ##############################
 ##     GYM ENVIRONOMENT     ##
 ##############################
+
 class SACF110Env(gym.Env):
     """
-    This environment builds a new path only once the car has physically reached
-    the previous path’s final point (i.e. within DIST_THRESHOLD).
-    
-    - The 32D action is interpreted as 16 local (x,y) increments.
-    - Angles between increments are clamped (±10°) to ensure a smooth path.
-    - A sub-index (0..15) tracks which waypoint is being pursued.
-    - If a new action is provided before the path is finished, it is stored as pending.
+    Custom F1Tenth environment with SAC integration and MPC path following
+    Handles high-level path planning and low-level MPC control
     """
-    DIST_THRESHOLD = 0.2  # [meters] threshold to consider a waypoint reached
+    
+    DIST_THRESHOLD = 0.2  # Waypoint reaching threshold
+    MPC_PARAMS = {
+        'desired_velocity': 2.0,    # m/s
+        'timestep': 0.1,            # seconds
+        'total_steps': 10,          # planning steps
+        'horizon_length': 5,        # MPC horizon
+        'state_cost': np.diag([1.0, 1.0, 0.1, 0.1]),
+        'input_cost': np.diag([0.1, 0.1]),
+        'terminal_cost': np.diag([10.0, 10.0, 1.0, 1.0])
+    }
 
     def __init__(self, f110_env: gym.Env):
         super().__init__()
         self.f110_env = f110_env
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(256,256), dtype=np.uint8)
-        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(32,), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=0, high=255, 
+                                              shape=(256,256), dtype=np.uint8)
+        self.action_space = gym.spaces.Box(low=-1, high=1, 
+                                         shape=(32,), dtype=np.float32)
         
+        # Path planning parameters
         self.car_length = 0.3
         self.vector_length = 0.5
-        
-        self.path_points = None    # List of 16 (x,y) points (global coordinates)
-        self.sub_index = 16        # Forces a new path parse on first step
-        self.pending_action = None # Latest agent action waiting to be used
-
-        self.last_obs = None
-        self.prev_x = None
-        self.prev_y = None
-
-    def reset(self):
-        # Example starting pose: (0, 0) with 90° heading
-        default_pose = np.array([[0.0, 0.0, 1.57]])
-        obs, _, _, _ = self.f110_env.reset(default_pose)
-
-        lidar_scan = obs['scans'][0]
-        # Use FILL mode with a black background for the lidar bitmap
-        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
-                                 bg_color='black', draw_mode='FILL')
-        self.last_obs = obs
-        
-        self.prev_x = obs['poses_x'][0]
-        self.prev_y = obs['poses_y'][0]
-
-        # Force new path
         self.path_points = None
         self.sub_index = 16
         self.pending_action = None
+
+        # State tracking
+        self.last_obs = None
+        self.prev_position = None
+        self.current_planned_path = None
+        self.map_scale = 10.0  # pixels per meter
+        self.map_origin = (128, 128)  
+
+    def reset(self):
+        """Reset environment with default pose and clear path history"""
+        default_pose = np.array([[0.0, 0.0, 1.57]])  # x, y, theta
+        obs, _, _, _ = self.f110_env.reset(default_pose)
+        
+        # Process initial observation
+        lidar_scan = obs['scans'][0]
+        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
+                                bg_color='black', draw_mode='FILL')
+        # Store the computed lidar bitmap in the observation
+        obs['lidar_bitmap'] = bitmap
+        self.last_obs = obs
+        self.prev_position = np.array([obs['poses_x'][0], obs['poses_y'][0]])
+
+        # Reset path tracking
+        self.path_points = None
+        self.sub_index = 16
+        self.pending_action = None
+        self.current_planned_path = None
 
         return bitmap
 
     def step(self, raw_action: np.ndarray):
         """
-        1) If the current path is finished and the car is near its final point,
-           parse pending_action (or raw_action) to build a new path.
-        2) If mid-path, store the latest action as pending without re-parsing.
-        3) Compute a steering & speed command (via MPC) to drive toward the current waypoint.
-        4) Advance the sub_index if the car is within DIST_THRESHOLD of the waypoint.
+        Execute one timestep with SAC action and MPC control
+        Returns:
+            bitmap: Processed LIDAR observation
+            total_reward: Calculated reward for this step
+            done: Episode completion flag
+            info: Additional information
         """
-        car_x = self.last_obs['poses_x'][0]
-        car_y = self.last_obs['poses_y'][0]
+        # Get current state
+        car_state = {
+            'x': self.last_obs['poses_x'][0],
+            'y': self.last_obs['poses_y'][0],
+            'theta': self.last_obs['poses_theta'][0]
+        }
+
+        # Path management
+        if self.path_points is None or self.sub_index >= 16:
+            self._handle_path_update(raw_action, car_state)
+
+        # MPC control calculation
+        mpc_action = self._calculate_mpc_control(car_state)
+
+        # Step simulation
+        obs, base_reward, done, info = self.f110_env.step(mpc_action)
         
-        if self.path_points is None:
-            self._parse_new_path(raw_action)
-        else:
-            if self.sub_index >= 16:
-                final_x, final_y = self.path_points[-1]
-                dist_to_final = np.hypot(final_x - car_x, final_y - car_y)
-                if dist_to_final < self.DIST_THRESHOLD:
-                    self._parse_new_path(raw_action)
-                else:
-                    self.pending_action = raw_action
-            else:
-                self.pending_action = raw_action
-
-        target_x, target_y = self.path_points[self.sub_index]
-        # Use the MPC controller (which computes steering and speed) for this step.
-        action_out = MPC_controller(
-            target_x, target_y,
-            car_x, car_y,
-            self.last_obs['poses_theta'][0]
-        )
-
-        obs, base_reward, done, info = self.f110_env.step(np.array([action_out]))
-
+        # Process new observation
         lidar_scan = obs['scans'][0]
         bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
-                                 bg_color='black', draw_mode='FILL')
-        
-        collision_penalty = -100.0 if done else 0.0
-        old_x, old_y = self.prev_x, self.prev_y
-        new_x = obs['poses_x'][0]
-        new_y = obs['poses_y'][0]
-        dist_traveled = np.sqrt((new_x - old_x)**2 + (new_y - old_y)**2)
-        self.prev_x, self.prev_y = new_x, new_y
-        
-        not_moving_penalty = -2.0 if dist_traveled < 0.001 else 0.0
-        progress_reward = dist_traveled * 10.0
-        
-        lap_completion_bonus = 0.0
-        if 'lap_time' in info and info['lap_time'] > 0:
-            lap_t = info['lap_time']
-            lap_completion_bonus = 500.0 - 10.0 * lap_t
-            done = True
-        
-        total_reward = (base_reward + progress_reward + lap_completion_bonus +
-                        not_moving_penalty - collision_penalty)
+                                bg_color='black', draw_mode='FILL')
+        # Add the lidar bitmap into the new observation
+        obs['lidar_bitmap'] = bitmap
 
+        # Calculate rewards using the previous observation's lidar bitmap
+        reward_components = self._calculate_rewards(obs, done)
+        total_reward = sum(reward_components.values())
+
+        # Update state
+        self._update_path_index(obs)
         self.last_obs = obs
+        self.prev_position = np.array([obs['poses_x'][0], obs['poses_y'][0]])
 
-        car_x2 = obs['poses_x'][0]
-        car_y2 = obs['poses_y'][0]
-        target_x2, target_y2 = self.path_points[self.sub_index]
-        dist_to_waypoint = np.hypot(target_x2 - car_x2, target_y2 - car_y2)
-        if dist_to_waypoint < self.DIST_THRESHOLD:
-            self.sub_index += 1
-
-        global current_planned_path
-        flattened = []
-        for px, py in self.path_points:
-            flattened.extend([px, py])
-        current_planned_path = np.array(flattened, dtype=np.float32)
+        # Update visualization
+        self._update_path_visualization()
 
         return bitmap, total_reward, done, info
 
-    def _parse_new_path(self, raw_action: np.ndarray):
-        """
-        Parse the provided (or pending) 32D action into 16 local increments,
-        then compute a new global path based on the car's current pose.
-        """
+
+    def _world_to_pixel(self, x: float, y: float) -> Tuple[int, int]:
+       px = int(self.map_origin[0] + x * self.map_scale)
+       py = int(self.map_origin[1] + y * self.map_scale)
+       return np.clip(px, 0, 255), np.clip(py, 0, 255)
+
+    def _handle_path_update(self, raw_action: np.ndarray, car_state: dict):
+        """Manage path creation and updates"""
         if self.pending_action is not None:
             action_to_use = self.pending_action
             self.pending_action = None
         else:
             action_to_use = raw_action
-        
-        # Compute clamped vectors (each normalized to have unit length)
+
+        # Convert SAC action to path vectors
         increments = compute_vectors_with_angle_clamp(action_to_use)
-
-        car_x = self.last_obs['poses_x'][0]
-        car_y = self.last_obs['poses_y'][0]
-        car_theta = self.last_obs['poses_theta'][0]
-
-        front_x = car_x + self.car_length * np.cos(car_theta)
-        front_y = car_y + self.car_length * np.sin(car_theta)
-
-        new_points = [(front_x, front_y)]
-        for i in range(16):
-            dx, dy = increments[i]
-            mag = np.sqrt(dx*dx + dy*dy) + 1e-8
-            dx_norm, dy_norm = dx/mag, dy/mag
-            dx_scaled = dx_norm * self.vector_length
-            dy_scaled = dy_norm * self.vector_length
-            
-            # Rotate the increment from local to global frame
-            global_dx = dx_scaled * np.cos(car_theta) - dy_scaled * np.sin(car_theta)
-            global_dy = dx_scaled * np.sin(car_theta) + dy_scaled * np.cos(car_theta)
-            
-            px, py = new_points[-1]
-            new_x = px + global_dx
-            new_y = py + global_dy
-            new_points.append((new_x, new_y))
-        
-        self.path_points = new_points[1:]
+        self.path_points = self._calculate_global_path(increments, car_state)
         self.sub_index = 0
+
+    def _calculate_global_path(self, increments: np.ndarray, car_state: dict) -> list:
+        """Convert local vectors to global path coordinates"""
+        path = []
+        x, y = car_state['x'], car_state['y']
+        theta = car_state['theta']
+        
+        # Start from front of car
+        front_x = x + self.car_length * np.cos(theta)
+        front_y = y + self.car_length * np.sin(theta)
+        path.append((front_x, front_y))
+
+        # Convert local increments to global coordinates
+        for dx, dy in increments:
+            dx_scaled = dx * self.vector_length
+            dy_scaled = dy * self.vector_length
+            
+            # Rotate to global frame
+            global_dx = dx_scaled * np.cos(theta) - dy_scaled * np.sin(theta)
+            global_dy = dx_scaled * np.sin(theta) + dy_scaled * np.cos(theta)
+            
+            new_x = path[-1][0] + global_dx
+            new_y = path[-1][1] + global_dy
+            path.append((new_x, new_y))
+
+        return path[1:]  # Skip initial point
+
+    def _calculate_mpc_control(self, car_state: dict) -> np.ndarray:
+        """Calculate low-level control using MPC"""
+        path_array = np.array(self.path_points)
+        mpc_params = self.MPC_PARAMS
+
+        # Get MPC control inputs, now passing current velocity from the last observation
+        control_seq = MPC_controller(
+            path=path_array,
+            desiredVelocity=mpc_params['desired_velocity'],
+            timeStep=mpc_params['timestep'],
+            totalSteps=mpc_params['total_steps'],
+            horizonLength=mpc_params['horizon_length'],
+            stateCost=mpc_params['state_cost'],
+            inputCost=mpc_params['input_cost'],
+            terminalCost=mpc_params['terminal_cost'],
+            current_vel_x=self.last_obs['linear_vels_x'][0],
+            current_vel_y=self.last_obs['linear_vels_y'][0]
+        )
+
+        # Convert MPC output to simulator action
+        current_speed = np.hypot(self.last_obs['linear_vels_x'][0],
+                                 self.last_obs['linear_vels_y'][0])
+        steering, throttle = MPC_converter(
+            x_accel=control_seq[0][0],
+            y_accel=control_seq[0][1],
+            current_speed=current_speed,
+            current_steer=self.last_obs.get('steering', [0.0])[0],
+            max_steer=0.4189,  # ~24 degrees
+            max_accel=3.0,
+            max_velo=8.0,
+            min_velo=-4.0
+        )
+
+        # Return a 2D array (num_agents x 2) to satisfy the environment indexing
+        return np.array([[steering, throttle]])
+
+    def _calculate_rewards(self, obs: dict, done: bool) -> dict:
+        """Calculate reward components"""
+        rewards = {
+            'base': 0.0,
+            'progress': 0.0,
+            'collision': 0.0,
+            'centering': 0.0
+        }
+
+        # Collision detection
+        px, py = self._world_to_pixel(obs['poses_x'][0], obs['poses_y'][0])
+        collision = detect_collison(self.last_obs['lidar_bitmap'], px, py)
+        rewards['collision'] = -100.0 if collision else 0.0
+
+        # Progress reward
+        new_pos = np.array([obs['poses_x'][0], obs['poses_y'][0]])
+        dist = np.linalg.norm(new_pos - self.prev_position)
+        rewards['progress'] = dist * 10.0
+
+        # Centering bonus
+        centering = centerline_reward(
+            fill_bitmap=self.last_obs['lidar_bitmap'],
+            car_x=int(obs['poses_x'][0]),
+            car_y=int(obs['poses_y'][0])
+        )
+        rewards['centering'] = centering * 2.0
+
+        # Lap completion
+        if 'lap_time' in obs and obs['lap_time'] > 0:
+            rewards['lap'] = 500.0 - 10.0 * obs['lap_time']
+
+        return rewards
+
+    def _update_path_index(self, obs: dict):
+        """Update waypoint index based on current position"""
+        current_pos = np.array([obs['poses_x'][0], obs['poses_y'][0]])
+        target_pos = np.array(self.path_points[self.sub_index])
+        dist = np.linalg.norm(current_pos - target_pos)
+        
+        if dist < self.DIST_THRESHOLD:
+            self.sub_index += 1
+
+    def _update_path_visualization(self):
+        """Update visualization of planned path"""
+        if self.path_points is not None:
+            flattened = []
+            for px, py in self.path_points:
+                flattened.extend([px, py])
+            self.current_planned_path = np.array(flattened, dtype=np.float32)
+            global current_planned_path
+            current_planned_path = self.current_planned_path
 
 ###########################################
 ##   LIDAR TO BITMAP, COURTESY OF ALY    ##
@@ -425,7 +507,7 @@ class SACAgent:
         Returns:
             np.ndarray: A 1D action vector (length 32).
         """
-        st = torch.FloatTensor(state).unsqueeze(0).unsqueeze(0).to(self.device)
+        st = torch.FloatTensor(state).unsqueeze(0).unsqueeze(0).to(self.device) / 255.0
         if evaluate:
             with torch.no_grad():
                 mean, _ = self.actor.forward(st)
@@ -500,57 +582,37 @@ class SACAgent:
 #######################################
 ## PATH CLAMP & MPC HELPER FUNCTIONS ##
 #######################################
-def clamp_vector_angle_diff(prev_angle: float, desired_angle: float, max_diff_deg: float = 10.0) -> float:
-    """
-    Ensures consecutive vectors differ by at most ±10° (or the given max_diff_deg).
-    
-    Args:
-        prev_angle (float): Previous vector’s angle (radians).
-        desired_angle (float): Desired current angle (radians).
-        max_diff_deg (float): Maximum allowed deviation in degrees.
-        
-    Returns:
-        float: The clamped angle (radians).
-    """
-    max_diff_rad = np.radians(max_diff_deg)
-    angle_diff = (desired_angle - prev_angle + np.pi) % (2 * np.pi) - np.pi
-    if angle_diff > max_diff_rad:
-        return prev_angle + max_diff_rad
-    elif angle_diff < -max_diff_rad:
-        return prev_angle - max_diff_rad
-    return desired_angle
-
-def compute_vectors_with_angle_clamp(raw_action: np.ndarray, max_diff_deg: float = 10.0) -> np.ndarray:
-    """
-    Interprets a 32D raw action as 16 local (x,y) increments,
-    forcing the first vector to be (1,0) and clamping subsequent angles.
-    
-    Args:
-        raw_action (np.ndarray): 1D array of length 32.
-        max_diff_deg (float): Maximum angle change between successive vectors.
-        
-    Returns:
-        np.ndarray: (16, 2) array of clamped, normalized increments.
-    """
-    assert raw_action.shape == (32,), "Raw action must be a 32D vector (16 x 2D movements)."
+def compute_vectors_with_angle_clamp(raw_action: np.ndarray, 
+                                   max_diff_deg: float = 10.0) -> np.ndarray:
+    """Convert raw action to path vectors with angle constraints"""
     vectors = raw_action.reshape(16, 2)
-    vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-    clamped_vectors = np.zeros_like(vectors)
-    clamped_vectors[0] = [1, 0]
-    prev_angle = np.arctan2(clamped_vectors[0][1], clamped_vectors[0][0])
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-8
+    
+    clamped = np.zeros_like(vectors)
+    clamped[0] = [1, 0]
+    prev_angle = 0.0
+    
     for i in range(1, 16):
-        desired_angle = np.arctan2(vectors[i][1], vectors[i][0])
+        desired_angle = np.arctan2(vectors[i,1], vectors[i,0])
         clamped_angle = clamp_vector_angle_diff(prev_angle, desired_angle, max_diff_deg)
-        clamped_vectors[i] = [np.cos(clamped_angle), np.sin(clamped_angle)]
+        clamped[i] = [np.cos(clamped_angle), np.sin(clamped_angle)]
         prev_angle = clamped_angle
-    return clamped_vectors
+        
+    return clamped
+
+def clamp_vector_angle_diff(prev_angle: float, desired_angle: float,
+                          max_diff_deg: float) -> float:
+    """Clamp angle difference between consecutive path segments"""
+    max_diff_rad = np.deg2rad(max_diff_deg)
+    angle_diff = (desired_angle - prev_angle + np.pi) % (2*np.pi) - np.pi
+    return prev_angle + np.clip(angle_diff, -max_diff_rad, max_diff_rad)
 
 
 ############################
 ##     MPC CONTROLLER     ##
 ############################
 
-def MPC_controller(path: np.ndarray, desiredVelocity: float, timeStep: float, totalSteps: float, horizonLength: float, stateCost: np.ndarray, inputCost: np.ndarray, terminalCost: np.ndarray) -> np.ndarray:
+def MPC_controller(path: np.ndarray, desiredVelocity: float, timeStep: float, totalSteps: int, horizonLength: int, stateCost: np.ndarray, inputCost: np.ndarray, terminalCost: np.ndarray, current_vel_x: float = 0.0, current_vel_y: float = 0.0) -> np.ndarray:
     """
     Computes control input(x and y acceleration) at each timeStep along path
     
@@ -562,6 +624,8 @@ def MPC_controller(path: np.ndarray, desiredVelocity: float, timeStep: float, to
     :param stateCost: MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
     :param inputCost: MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
     :param terminalCost: MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
+    :param current_vel_x: Current x-velocity of the car
+    :param current_vel_y: Current y-velocity of the car
 
     :return: An array of [x_acceleration, y_acceleration] for the converter
     """
@@ -625,8 +689,8 @@ def MPC_controller(path: np.ndarray, desiredVelocity: float, timeStep: float, to
     state_history = [] # Record of car state at each timeStep
 
     # Set the initial state.
-    # Here we start at the first point of the drawn track, with zero velocity.
-    x_current = np.array([path[0, 0], path[0, 1], 0, 0])
+    # Here we start at the first point of the drawn track, with current velocity.
+    x_current = np.array([path[0, 0], path[0, 1], current_vel_x, current_vel_y])
     state_history.append(x_current)
 
     # Iterates through the simulation steps
@@ -666,13 +730,13 @@ def MPC_controller(path: np.ndarray, desiredVelocity: float, timeStep: float, to
         # Update the current state using the system dynamics.
         x_current = A @ x_current + B @ u_apply
 
-        state_history.append(x_current, u_apply)
+        state_history.append(x_current)
     
     # u_history and state_history can be combined into state_history. Optional
     u_history = np.array(u_history)
     state_history = np.array(state_history)
 
-    return u.history
+    return np.array(u_history)
 
 def MPC_converter(x_accel: float, y_accel: float, current_speed: float, current_steer: float, max_steer: float, max_accel: float, max_velo: float, min_velo: float) -> np.ndarray:
     """
@@ -689,27 +753,16 @@ def MPC_converter(x_accel: float, y_accel: float, current_speed: float, current_
 
     :return: A 1D array [steering, thrust] for the simulator step.
     """
-    # Calculate total acceleration
-    total_accel = np.sqrt(x_accel**2 + y_accel**2)
+    target_angle = np.arctan2(y_accel, x_accel)
+    angle_diff = (target_angle - current_steer + np.pi) % (2*np.pi) - np.pi
+    steering = np.clip(angle_diff, -max_steer, max_steer)
     
-    # Normalize the acceleration to within given limits
-    thrust = min(total_accel, max_accel)
+    # Calculate acceleration in direction of current heading
+    forward_accel = x_accel * np.cos(current_steer) + y_accel * np.sin(current_steer)
+    throttle = np.clip(forward_accel, -1.0, 1.0)
     
-    # Calculate the desired angle from acceleration (direction of desired velocity)
-    desired_steer = np.arctan2(y_accel, x_accel)  # Angle of the desired velocity vector
-    
-    # Calculate the steering angle difference
-    steer_diff = desired_steer - current_steer
-    
-    # Normalize steering
-    if np.fabs(steer_diff) > 1e-4:
-        final_steer = (steer_diff / np.fabs(steer_diff)) * max_steer
-    else:
-        final_steer = 0.0
-    
-    return np.array([final_steer, thrust])
+    return np.array([steering, throttle])
 
-<<<<<<< HEAD
 def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=1):
     """
     Detects if the car is about to collide with an obstacle.
@@ -881,13 +934,6 @@ def centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50):
     reward = max(0.0, 1.0 - norm_dist)
     return reward
 
-=======
-##############################
-##  DISPLAYING EVERYTHING   ##
-##############################
-arrow_graphics = []
-current_planned_path = None
->>>>>>> dev
 
 def render_arrow(env_renderer, flattened_path: np.ndarray):
     """
@@ -972,19 +1018,5 @@ def main():
     cv2.destroyAllWindows()
     print("Training complete, model saved as sac_actor.pth")
 
-<<<<<<< HEAD
-    # reward = 0.0
-
-    # # 1. Collision angle penalty
-    # angle_pen = collision_angle_penalty(fill_bitmap, car_x, car_y)
-    # reward += angle_pen  # This is negative if collision
-
-    # # 2. Centerline reward
-    # center_r = centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50)
-    # reward += center_r  # Higher if near center, 0 or negative if off track
-
-# Run the main function.
-=======
->>>>>>> dev
 if __name__ == "__main__":
     main()
