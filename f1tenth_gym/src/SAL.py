@@ -185,6 +185,7 @@ class SACF110Env(gym.Env):
         path_array = np.array(self.path_points)
         mpc_params = self.MPC_PARAMS
 
+        print(f"path_array {path_array}")
         # Get MPC control inputs, now passing current velocity from the last observation
         control_seq = MPC_controller(
             path=path_array,
@@ -199,14 +200,16 @@ class SACF110Env(gym.Env):
             current_vel_y=self.last_obs['linear_vels_y'][0]
         )
 
+        print(f"control seq {control_seq}")
         # Convert MPC output to simulator action
         current_speed = np.hypot(self.last_obs['linear_vels_x'][0],
                                  self.last_obs['linear_vels_y'][0])
+        current_steer = car_state['theta']
         steering, throttle = MPC_converter(
             x_accel=control_seq[0][0],
             y_accel=control_seq[0][1],
             current_speed=current_speed,
-            current_steer=self.last_obs.get('steering', [0.0])[0],
+            current_steer=current_steer,
             max_steer=0.4189,  # ~24 degrees
             max_accel=3.0,
             max_velo=8.0,
@@ -753,14 +756,19 @@ def MPC_converter(x_accel: float, y_accel: float, current_speed: float, current_
 
     :return: A 1D array [steering, thrust] for the simulator step.
     """
+    print(f"curr speed {current_speed}")
+    print(f"curr steer {current_steer}")
+
     target_angle = np.arctan2(y_accel, x_accel)
     angle_diff = (target_angle - current_steer + np.pi) % (2*np.pi) - np.pi
     steering = np.clip(angle_diff, -max_steer, max_steer)
     
-    # Calculate acceleration in direction of current heading
-    forward_accel = x_accel * np.cos(current_steer) + y_accel * np.sin(current_steer)
-    throttle = np.clip(forward_accel, -1.0, 1.0)
+    # Calculate acceleration
+    forward_accel = np.sqrt(x_accel**2 + y_accel**2)
+    throttle = np.clip(forward_accel, -max_accel, max_accel)
     
+    print(f"throttle {throttle}")
+
     return np.array([steering, throttle])
 
 def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=1):
