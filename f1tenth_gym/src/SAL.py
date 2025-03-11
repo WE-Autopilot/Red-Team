@@ -763,11 +763,21 @@ def MPC_converter(x_accel: float, y_accel: float, current_speed: float, current_
     angle_diff = (target_angle - current_steer + np.pi) % (2*np.pi) - np.pi
     steering = np.clip(angle_diff, -max_steer, max_steer)
     
-    # Calculate acceleration
+    # Calculate the forward acceleration using sin and cos based on angle difference
+    angle_diff_rad = angle_diff  # angle_diff is already in radians
     forward_accel = np.sqrt(x_accel**2 + y_accel**2)
-    throttle = np.clip(forward_accel, -max_accel, max_accel)
+
+    # Project the forward acceleration onto the direction of the current steering angle
+    adjusted_accel = forward_accel * np.cos(angle_diff_rad)
+
+    # Multiply by max_accel to scale the acceleration
+    throttle = adjusted_accel * max_accel
     
-    print(f"throttle {throttle}")
+    # Check if the current speed is near the maximum speed, if so, set throttle to 0
+    if current_speed >= max_velo * 0.95:  # 95% of max velocity, you can adjust the threshold
+        throttle = 0
+    else:
+        throttle = np.clip(forward_accel, -max_accel, max_accel)
 
     return np.array([steering, throttle])
 
