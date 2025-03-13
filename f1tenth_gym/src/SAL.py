@@ -7,7 +7,6 @@ import os
 import gym
 import cv2
 import random
-from pyglet.gl import GL_LINES
 from collections import deque
 from typing import List, Tuple, Union
 from weap_util.lidar import lidar_to_bitmap
@@ -659,9 +658,13 @@ def load_latest_checkpoint(agent, checkpoint_dir="checkpoints"):
 # In your main training loop, before starting training:
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    render_on = False
     f110_env = gym.make('f110_gym:f110-v0', map='example_map', map_ext='.png',
                         num_agents=1, timestep=0.015)
-    f110_env.add_render_callback(render_callback)
+    
+    if render_on:
+        from pyglet.gl import GL_LINES
+        f110_env.add_render_callback(render_callback)
     
     env = SACF110Env(f110_env)
     agent = SACAgent(device, action_dim=16)
