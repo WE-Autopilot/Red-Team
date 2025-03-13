@@ -169,34 +169,35 @@ class SACF110Env(gym.Env):
         return path[1:]  # Skip initial point
 
     def _calculate_rewards(self, obs: dict, done: bool) -> dict:
-        """Calculate reward components with adjustments for efficient learning."""
+        """Revised reward function to drive fast, stay centered, and avoid crashes."""
         rewards = {}
+        
+        # Get the car's center in the LiDAR bitmap.
+        car_x = self.last_obs['lidar_bitmap'].shape[1] // 2
+        car_y = self.last_obs['lidar_bitmap'].shape[0] // 2
 
-        # Time penalty: encourage faster completion.
-        rewards['time_penalty'] = -0.1
-
-        # Progress reward: reward distance traveled with a higher multiplier.
-        new_pos = np.array([obs['poses_x'][0], obs['poses_y'][0]])
-        dist = np.linalg.norm(new_pos - self.prev_position)
-        rewards['progress'] = dist * 15.0  # increased multiplier from 10.0 to 15.0
-
-        # Collision detection and penalty: use a heavy penalty plus an angle-based adjustment.
-        car_x, car_y = self.last_obs['lidar_bitmap'].shape[1] // 2, self.last_obs['lidar_bitmap'].shape[0] // 2
-        collision = detect_collison(self.last_obs['lidar_bitmap'], car_x, car_y) 
+        # Collision penalty: Strong penalty if a collision is detected.
+        collision = detect_collison(self.last_obs['lidar_bitmap'], car_x, car_y)
         if collision:
-            # collision_angle_penalty returns a small negative value (more penalty for shallow angles)
-            angle_penalty = collision_angle_penalty(self.last_obs['lidar_bitmap'],car_x,car_y)
-            rewards['collision'] = -150.0 + angle_penalty  # base heavy penalty adjusted by angle
+            rewards['collision'] = -300.0  # Heavy penalty for crashing
         else:
             rewards['collision'] = 0.0
 
-        # Centering bonus: reward staying near the center of the drivable area.
-        centering = centerline_reward(self.last_obs['lidar_bitmap'], car_x, car_y)
-        rewards['centering'] = centering * 3.0  # increased multiplier from 2.0 to 3.0
+        # Progress reward: Encourage fast movement along the track.
+        new_pos = np.array([obs['poses_x'][0], obs['poses_y'][0]])
+        dist = np.linalg.norm(new_pos - self.prev_position)
+        rewards['progress'] = dist * 25.0  # Increased multiplier rewards speed
 
-        # Lap completion bonus: encourage fast lap completion.
+        # Centering bonus: Reward the car for staying near the center of the drivable area.
+        centering = centerline_reward(self.last_obs['lidar_bitmap'], car_x, car_y)
+        rewards['centering'] = centering * 10.0  # Higher weight emphasizes centering
+
+        # Time penalty: Small constant penalty per step to encourage faster lap completion.
+        rewards['time_penalty'] = -0.1
+
+        # Lap bonus (if available): Reward faster lap times.
         if 'lap_time' in obs and obs['lap_time'] > 0:
-            rewards['lap'] = 600.0 - 15.0 * obs['lap_time']  # increased base reward and penalty rate
+            rewards['lap'] = 200.0 - 20.0 * obs['lap_time']
         else:
             rewards['lap'] = 0.0
 
