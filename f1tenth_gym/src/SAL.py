@@ -10,6 +10,7 @@ import random
 from pyglet.gl import GL_LINES
 from collections import deque
 from typing import List, Tuple, Union
+import random
 from weap_util.lidar import lidar_to_bitmap
 
 # Global variables for rendering callbacks
@@ -657,9 +658,25 @@ def load_latest_checkpoint(agent, checkpoint_dir="checkpoints"):
         print("No checkpoint files found. Starting from scratch.")
 
 # In your main training loop, before starting training:
+
+maps = ["example_map", 
+        "Yasmarina_map",
+        "Zandvoort_map", 
+        "Sepang_map", 
+        "Sakhir_map",
+        "Oschersleben_map",
+        "SaoPaulo_map",  
+        "Shanghai_map", 
+        "Silverstone_map", 
+        "Sochi_map", 
+        "Spa_map",
+        "Spielberg_map",
+        "YasMarina_map"
+        ]
+random_map = random.choice(maps)
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    f110_env = gym.make('f110_gym:f110-v0', map='example_map', map_ext='.png',
+    f110_env = gym.make('f110_gym:f110-v0', map=random_map, map_ext='.png',
                         num_agents=1, timestep=0.015)
     f110_env.add_render_callback(render_callback)
     
