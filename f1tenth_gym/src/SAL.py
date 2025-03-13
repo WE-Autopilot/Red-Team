@@ -64,7 +64,7 @@ class SACF110Env(gym.Env):
         # Process initial observation
         lidar_scan = obs['scans'][0]
         bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
-                                bg_color='black', winding_dir='CW', starting_angle=np.pi/2)
+                                bg_color='black', draw_mode="FILL", winding_dir='CW', starting_angle=np.pi/2)
         # Store the computed lidar bitmap in the observation
         obs['lidar_bitmap'] = bitmap
         self.last_obs = obs
@@ -103,6 +103,14 @@ class SACF110Env(gym.Env):
         action_out = get_steering_and_speed(target_x, target_y,
                                             car_state['x'], car_state['y'],
                                             car_state['theta'])
+        
+        # Check if the computed speed is 0 (or very close to 0)
+        if np.isclose(action_out[0, 1], 0.0, atol=1e-6):
+            # Simulate a crash: assign a crash penalty and force an episode restart
+            crash_penalty = -100.0
+            info = {"crash": True, "reason": "velocity_zero"}
+            obs = self.reset()
+            return obs, crash_penalty, True, info
 
         # Step simulation with the simple control action
         obs, base_reward, done, info = self.f110_env.step(action_out)
@@ -110,7 +118,7 @@ class SACF110Env(gym.Env):
         # Process new observation
         lidar_scan = obs['scans'][0]
         bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
-                                bg_color='black', winding_dir='CW', starting_angle=np.pi/2)
+                                bg_color='black', draw_mode="FILL", winding_dir='CW', starting_angle=np.pi/2)
         # Add the lidar bitmap into the new observation
         obs['lidar_bitmap'] = bitmap
 
