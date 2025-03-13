@@ -119,6 +119,9 @@ class SACF110Env(gym.Env):
 
         # Calculate rewards using the previous observation's lidar bitmap
         reward_components = self._calculate_rewards(obs, done)
+        # print(f"Progress: {reward_components['progress']:.2f}, Collision: {reward_components['collision']:.2f}, Centering: {reward_components['centering']:.2f}")
+        if(reward_components['collision'] < -150):
+            done = True     # End episode if a collision is detected
         total_reward = sum(reward_components.values())
 
         # Update state
@@ -188,23 +191,17 @@ class SACF110Env(gym.Env):
         rewards['progress'] = dist * 15.0  # increased multiplier from 10.0 to 15.0
 
         # Collision detection and penalty: use a heavy penalty plus an angle-based adjustment.
-        px, py = self._world_to_pixel(obs['poses_x'][0], obs['poses_y'][0])
-        collision = detect_collison(self.last_obs['lidar_bitmap'], px, py)
+        car_x, car_y = self.last_obs['lidar_bitmap'].shape[1] // 2, self.last_obs['lidar_bitmap'].shape[0] // 2
+        collision = detect_collison(self.last_obs['lidar_bitmap'], car_x, car_y) 
         if collision:
             # collision_angle_penalty returns a small negative value (more penalty for shallow angles)
-            angle_penalty = collision_angle_penalty(self.last_obs['lidar_bitmap'],
-                                                    int(obs['poses_x'][0]),
-                                                    int(obs['poses_y'][0]))
+            angle_penalty = collision_angle_penalty(self.last_obs['lidar_bitmap'],car_x,car_y)
             rewards['collision'] = -150.0 + angle_penalty  # base heavy penalty adjusted by angle
         else:
             rewards['collision'] = 0.0
 
         # Centering bonus: reward staying near the center of the drivable area.
-        centering = centerline_reward(
-            fill_bitmap=self.last_obs['lidar_bitmap'],
-            car_x=int(obs['poses_x'][0]),
-            car_y=int(obs['poses_y'][0])
-        )
+        centering = centerline_reward(self.last_obs['lidar_bitmap'], car_x, car_y)
         rewards['centering'] = centering * 3.0  # increased multiplier from 2.0 to 3.0
 
         # Lap completion bonus: encourage fast lap completion.
@@ -465,19 +462,23 @@ def get_steering_and_speed(
     return np.array([[steering, speed]])
 
 
-def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=1):
+def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=3):
     """
     Detects if the car is about to collide with an obstacle.
     """
     h, w = fill_bitmap.shape
     for dy in range(-neighborhood_check, neighborhood_check+1):
         for dx in range(-neighborhood_check, neighborhood_check+1):
-            if dx == 0 and dy == 0:
+
+            # Skip the car's exact center pixel
+            if -3<dx<3 and -3<dy<3:
                 continue
+
+
             nx = car_x + dx
             ny = car_y + dy
             if 0 <= nx < w and 0 <= ny < h:
-                if fill_bitmap[ny, nx] == 255:
+                if fill_bitmap[ny, nx] == 0:
                     return True
     return False
     
@@ -490,15 +491,15 @@ def get_wall_normal(fill_bitmap, car_x, car_y, region=10):
     grad_x = cv2.Sobel(fill_bitmap, cv2.CV_32F, 1, 0, ksize=3)
     grad_y = cv2.Sobel(fill_bitmap, cv2.CV_32F, 0, 1, ksize=3)
     h, w = fill_bitmap.shape
-    x0 = max(0, car_x - region)
-    x1 = min(w, car_x + region + 1)
-    y0 = max(0, car_y - region)
-    y1 = min(h, car_y + region + 1)
+    x0 = max(0, car_x - region - 2)
+    x1 = min(w, car_x + region + 3)
+    y0 = max(0, car_y - region - 2)
+    y1 = min(h, car_y + region + 3)
 
     grad_vectors = []
     for y in range(y0, y1):
         for x in range(x0, x1):
-            if edges[y, x] == 255:
+            if edges[y, x] == 0:
                 gx = grad_x[y, x]
                 gy = grad_y[y, x]
                 if not (abs(gx) < 1e-5 and abs(gy) < 1e-5):
@@ -534,8 +535,8 @@ def collision_angle_penalty(fill_bitmap, car_x, car_y):
         return 0.0
 
     wall_normal = get_wall_normal(fill_bitmap, car_x, car_y)
-    angle_deg = compute_collision_angle(wall_normal)
-    penalty = np.interp(abs(angle_deg), [0, 90], [0.1, 1.0])
+    angle_deg = 90 - compute_collision_angle(wall_normal)
+    penalty = np.interp(abs(angle_deg), [0, 90], [0.1, 10000.0])
     reward_delta -= penalty
     return reward_delta
 
@@ -547,12 +548,12 @@ def distance_from_row_center(fill_bitmap, car_x, car_y):
     if not (0 <= car_y < h and 0 <= car_x < w):
         return None
 
-    left_edge = car_x
+    left_edge = car_x - 3
     while left_edge >= 0 and fill_bitmap[car_y, left_edge] == 255:
         left_edge -= 1
     left_edge += 1
 
-    right_edge = car_x
+    right_edge = car_x + 3
     while right_edge < w and fill_bitmap[car_y, right_edge] == 255:
         right_edge += 1
     right_edge -= 1
@@ -561,8 +562,10 @@ def distance_from_row_center(fill_bitmap, car_x, car_y):
         return None
 
     midpoint = (left_edge + right_edge) / 2.0
+    halfwidth = ((right_edge - left_edge) / 2.0) - 2
     dist = abs(car_x - midpoint)
-    return dist
+    norm_dist = dist / halfwidth
+    return norm_dist
 
 def centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50):
     """
@@ -572,8 +575,7 @@ def centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50):
     if dist is None:
         return -1.0
 
-    norm_dist = dist / max_lane_halfwidth
-    reward = max(0.0, 1.0 - norm_dist)
+    reward = max(0.0, 1.0 - dist)
     return reward
 
 
