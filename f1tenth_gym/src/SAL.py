@@ -15,6 +15,7 @@ import pyglet
 from pyglet.gl import GL_LINES
 from collections import deque
 from typing import List, Tuple, Union
+from weap_util.lidar import lidar_to_bitmap
 
 # Global variables for rendering callbacks
 arrow_graphics = []
@@ -63,7 +64,7 @@ class SACF110Env(gym.Env):
         # Process initial observation
         lidar_scan = obs['scans'][0]
         bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
-                                bg_color='black', draw_mode='FILL')
+                                bg_color='black', winding_dir='CW', starting_angle=np.pi/2)
         # Store the computed lidar bitmap in the observation
         obs['lidar_bitmap'] = bitmap
         self.last_obs = obs
@@ -109,7 +110,7 @@ class SACF110Env(gym.Env):
         # Process new observation
         lidar_scan = obs['scans'][0]
         bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
-                                bg_color='black', draw_mode='FILL')
+                                bg_color='black', winding_dir='CW', starting_angle=np.pi/2)
         # Add the lidar bitmap into the new observation
         obs['lidar_bitmap'] = bitmap
 
@@ -222,101 +223,6 @@ class SACF110Env(gym.Env):
             self.current_planned_path = np.array(flattened, dtype=np.float32)
             global current_planned_path
             current_planned_path = self.current_planned_path
-
-
-###########################################
-##   LIDAR TO BITMAP, COURTESY OF ALY    ##
-###########################################
-def _lidar_to_bitmap(
-        scan: list[float],               
-        winding_dir: str = 'CCW',          
-        starting_angle: float = -np.pi/2,  
-        max_scan_radius: float | None = None,
-        scaling_factor: float | None = 10, 
-        bg_color: str = 'white', 
-        draw_center: bool = True,  
-        output_image_dims: tuple[int] = (256, 256),
-        target_beam_count: int = 600,
-        fov: float = 2*np.pi,
-        draw_mode: str = "FILL"
-    ) -> np.ndarray:  
-    """
-    Creates a bitmap image from lidar scan data.
-    Assumes rays are equally spaced over the field of view.
-    """
-    assert winding_dir in ['CW', 'CCW'], "winding_dir must be either CW or CCW"
-    assert bg_color in ['black', 'white']
-    assert draw_mode in ['RAYS', 'POLYGON', 'FILL']
-    assert len(output_image_dims) == 2 and all(x > 0 for x in output_image_dims)
-    assert 0 < target_beam_count < len(scan)
-    assert 0 < fov <= 2*np.pi, "FOV must be between 0 and 2pi"
-
-    if max_scan_radius is not None:
-        scaling_factor = min(output_image_dims) / max_scan_radius
-    elif scaling_factor is None:
-        raise ValueError("Provide either max_scan_radius or scaling_factor")
-    
-    BG_COLOR, DRAW_COLOR = (0, 255) if bg_color == 'black' else (255, 0)
-    image = np.ones(output_image_dims, dtype=np.uint8) * BG_COLOR
-    direction = 1 if winding_dir == 'CCW' else -1
-
-    indices = np.linspace(0, len(scan) - 1, target_beam_count, dtype=int)
-    data = np.array(scan)[indices]
-    angles = starting_angle + direction * fov * np.linspace(0, 1, target_beam_count)
-    center = np.array([output_image_dims[0] // 2, output_image_dims[1] // 2])
-    points = np.column_stack((
-        np.rint(center[0] + scaling_factor * data * np.cos(angles)).astype(int),
-        np.rint(center[1] + scaling_factor * data * np.sin(angles)).astype(int)
-    ))
-
-    if draw_mode == 'FILL':
-        cv2.fillPoly(image, [points], DRAW_COLOR)
-    elif draw_mode == 'POLYGON':
-        cv2.polylines(image, [points], isClosed=True, color=DRAW_COLOR, thickness=1)
-    elif draw_mode == 'RAYS':
-        for p in points:
-            cv2.line(image, tuple(center), tuple(p), color=DRAW_COLOR, thickness=1)
-            cv2.rectangle(image, tuple(p - 2), tuple(p + 2), color=DRAW_COLOR, thickness=-1)
-
-    if draw_center:
-        cv2.rectangle(image, tuple(center - 2), tuple(center + 2),
-                      color=BG_COLOR if draw_mode == "FILL" else DRAW_COLOR, thickness=-1)
-    
-    return image
-
-def lidar_to_bitmap(
-        scan: list[float],               
-        winding_dir: str = 'CCW',          
-        starting_angle: float = -np.pi/2,  
-        max_scan_radius: float | None = None,
-        scaling_factor: float | None = 10, 
-        bg_color: str = 'white', 
-        draw_center: bool = True,  
-        output_image_dims: tuple[int] = (256, 256),
-        target_beam_count: int = 600,
-        fov: float = 2*np.pi,
-        draw_mode: str = "POLYGON",
-        channels: int = 1
-    ) -> np.ndarray:  
-    """
-    Wraps _lidar_to_bitmap to optionally convert the grayscale image
-    into a multi-channel image.
-    """
-    assert channels in [1, 3, 4], "channels must be 1, 3, or 4"
-    grayscale_img = _lidar_to_bitmap(scan, winding_dir, starting_angle,
-                                     max_scan_radius, scaling_factor, bg_color,
-                                     draw_center, output_image_dims,
-                                     target_beam_count, fov, draw_mode)
-    if channels == 1:
-        return grayscale_img
-    elif channels == 3:
-        return np.stack([grayscale_img] * 3, axis=-1)
-    elif channels == 4:
-        alpha_channel = np.full_like(grayscale_img, 255)
-        return np.stack([grayscale_img, grayscale_img, grayscale_img, alpha_channel], axis=-1)
-    else:
-        raise ValueError("Invalid number of channels. Supported: 1, 3, or 4.")
-
 
 ##############################
 ##        OPIUM MODEL       ##
