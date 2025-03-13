@@ -10,13 +10,11 @@ import random
 import bisect
 import pickle
 import math
-import cvxpy as cp
-from scipy.interpolate import CubicSpline
-from collections import deque
-from typing import List, Tuple, Union
 import time
 import pyglet
 from pyglet.gl import GL_LINES
+from collections import deque
+from typing import List, Tuple, Union
 
 # Global variables for rendering callbacks
 arrow_graphics = []
@@ -24,25 +22,16 @@ current_planned_path = None
 
 
 ##############################
-##     GYM ENVIRONOMENT     ##
+##     GYM ENVIRONMENT      ##
 ##############################
 
 class SACF110Env(gym.Env):
     """
-    Custom F1Tenth environment with SAC integration and MPC path following
-    Handles high-level path planning and low-level MPC control
+    Custom F1Tenth environment with SAC integration and simple low-level control.
+    Handles high-level path planning and uses a basic steering controller for movement.
     """
     
     DIST_THRESHOLD = 0.2  # Waypoint reaching threshold
-    MPC_PARAMS = {
-        'desired_velocity': 2.0,    # m/s
-        'timestep': 0.1,            # seconds
-        'total_steps': 10,          # planning steps
-        'horizon_length': 5,        # MPC horizon
-        'state_cost': np.diag([1.0, 1.0, 0.1, 0.1]),
-        'input_cost': np.diag([0.1, 0.1]),
-        'terminal_cost': np.diag([10.0, 10.0, 1.0, 1.0])
-    }
 
     def __init__(self, f110_env: gym.Env):
         super().__init__()
@@ -90,7 +79,7 @@ class SACF110Env(gym.Env):
 
     def step(self, raw_action: np.ndarray):
         """
-        Execute one timestep with SAC action and MPC control
+        Execute one timestep with SAC action and a simple steering controller.
         Returns:
             bitmap: Processed LIDAR observation
             total_reward: Calculated reward for this step
@@ -105,14 +94,17 @@ class SACF110Env(gym.Env):
         }
 
         # Path management
-        if self.path_points is None or self.sub_index >= 16:
+        if self.path_points is None or self.sub_index >= len(self.path_points):
             self._handle_path_update(raw_action, car_state)
 
-        # MPC control calculation
-        mpc_action = self._calculate_mpc_control(car_state)
+        # Use the next waypoint from the planned path and compute control using the simple controller.
+        target_x, target_y = self.path_points[self.sub_index]
+        action_out = get_steering_and_speed(target_x, target_y,
+                                            car_state['x'], car_state['y'],
+                                            car_state['theta'])
 
-        # Step simulation
-        obs, base_reward, done, info = self.f110_env.step(mpc_action)
+        # Step simulation with the simple control action
+        obs, base_reward, done, info = self.f110_env.step(action_out)
         
         # Process new observation
         lidar_scan = obs['scans'][0]
@@ -134,7 +126,6 @@ class SACF110Env(gym.Env):
         self._update_path_visualization()
 
         return bitmap, total_reward, done, info
-
 
     def _world_to_pixel(self, x: float, y: float) -> Tuple[int, int]:
        px = int(self.map_origin[0] + x * self.map_scale)
@@ -179,45 +170,6 @@ class SACF110Env(gym.Env):
             path.append((new_x, new_y))
 
         return path[1:]  # Skip initial point
-
-    def _calculate_mpc_control(self, car_state: dict) -> np.ndarray:
-        """Calculate low-level control using MPC"""
-        path_array = np.array(self.path_points)
-        mpc_params = self.MPC_PARAMS
-
-        print(f"path_array {path_array}")
-        # Get MPC control inputs, now passing current velocity from the last observation
-        control_seq = MPC_controller(
-            path=path_array,
-            desiredVelocity=mpc_params['desired_velocity'],
-            timeStep=mpc_params['timestep'],
-            totalSteps=mpc_params['total_steps'],
-            horizonLength=mpc_params['horizon_length'],
-            stateCost=mpc_params['state_cost'],
-            inputCost=mpc_params['input_cost'],
-            terminalCost=mpc_params['terminal_cost'],
-            current_vel_x=self.last_obs['linear_vels_x'][0],
-            current_vel_y=self.last_obs['linear_vels_y'][0]
-        )
-
-        print(f"control seq {control_seq}")
-        # Convert MPC output to simulator action
-        current_speed = np.hypot(self.last_obs['linear_vels_x'][0],
-                                 self.last_obs['linear_vels_y'][0])
-        current_steer = car_state['theta']
-        steering, throttle = MPC_converter(
-            x_accel=control_seq[0][0],
-            y_accel=control_seq[0][1],
-            current_speed=current_speed,
-            current_steer=current_steer,
-            max_steer=0.4189,  # ~24 degrees
-            max_accel=3.0,
-            max_velo=8.0,
-            min_velo=-4.0
-        )
-
-        # Return a 2D array (num_agents x 2) to satisfy the environment indexing
-        return np.array([[steering, throttle]])
 
     def _calculate_rewards(self, obs: dict, done: bool) -> dict:
         """Calculate reward components"""
@@ -271,6 +223,7 @@ class SACF110Env(gym.Env):
             global current_planned_path
             current_planned_path = self.current_planned_path
 
+
 ###########################################
 ##   LIDAR TO BITMAP, COURTESY OF ALY    ##
 ###########################################
@@ -290,22 +243,6 @@ def _lidar_to_bitmap(
     """
     Creates a bitmap image from lidar scan data.
     Assumes rays are equally spaced over the field of view.
-    
-    Args:
-        scan (list[float]): List of lidar measurements.
-        winding_dir (str): Direction for the rays ('CW' or 'CCW').
-        starting_angle (float): Offset from the positive x-axis.
-        max_scan_radius (float | None): Maximum expected range; if provided, used for scaling.
-        scaling_factor (float | None): Scaling factor if max_scan_radius is not given.
-        bg_color (str): Background color, either 'white' or 'black'.
-        draw_center (bool): Whether to draw a center marker.
-        output_image_dims (tuple[int]): Dimensions (height, width) of the output image.
-        target_beam_count (int): Number of beams (rays) to be used.
-        fov (float): Field of view in radians.
-        draw_mode (str): 'RAYS', 'POLYGON', or 'FILL' mode for drawing.
-        
-    Returns:
-        np.ndarray: A single-channel (grayscale) bitmap image.
     """
     assert winding_dir in ['CW', 'CCW'], "winding_dir must be either CW or CCW"
     assert bg_color in ['black', 'white']
@@ -364,13 +301,6 @@ def lidar_to_bitmap(
     """
     Wraps _lidar_to_bitmap to optionally convert the grayscale image
     into a multi-channel image.
-    
-    Args:
-        (see _lidar_to_bitmap for other parameters)
-        channels (int): 1 (grayscale), 3 (RGB), or 4 (RGBA).
-    
-    Returns:
-        np.ndarray: The lidar bitmap image.
     """
     assert channels in [1, 3, 4], "channels must be 1, 3, or 4"
     grayscale_img = _lidar_to_bitmap(scan, winding_dir, starting_angle,
@@ -386,6 +316,7 @@ def lidar_to_bitmap(
         return np.stack([grayscale_img, grayscale_img, grayscale_img, alpha_channel], axis=-1)
     else:
         raise ValueError("Invalid number of channels. Supported: 1, 3, or 4.")
+
 
 ##############################
 ##        OPIUM MODEL       ##
@@ -471,12 +402,6 @@ class ReplayBuffer:
 class SACAgent:
     """
     Soft Actor-Critic agent for continuous control.
-    
-    Attributes:
-        device: Torch device.
-        actor: The policy network.
-        critic1, critic2: The Q-value estimation networks.
-        Target networks for critics (for soft updates).
     """
     def __init__(self, device: torch.device, action_dim: int = 16, gamma: float = 0.99,
                  tau: float = 0.005, alpha: float = 0.2, actor_lr: float = 3e-4,
@@ -502,13 +427,6 @@ class SACAgent:
     def select_action(self, state: np.ndarray, evaluate: bool = False) -> np.ndarray:
         """
         Select an action given the current state.
-        
-        Args:
-            state (np.ndarray): Observation (expected shape: 256x256 or similar).
-            evaluate (bool): If True, choose the mean (deterministic) action.
-            
-        Returns:
-            np.ndarray: A 1D action vector (length 32).
         """
         st = torch.FloatTensor(state).unsqueeze(0).unsqueeze(0).to(self.device) / 255.0
         if evaluate:
@@ -524,13 +442,6 @@ class SACAgent:
     def update(self, replay_buffer: ReplayBuffer, batch_size: int = 64) -> Tuple[float, float, float]:
         """
         Performs a SAC update (both actor and critics).
-        
-        Args:
-            replay_buffer (ReplayBuffer): Buffer to sample transitions from.
-            batch_size (int): Number of samples per update.
-            
-        Returns:
-            Tuple containing (actor_loss, critic1_loss, critic2_loss).
         """
         if len(replay_buffer) < batch_size:
             return 0, 0, 0
@@ -553,8 +464,8 @@ class SACAgent:
         
         cq1 = self.critic1(s, a)
         cq2 = self.critic2(s, a)
-        c1_loss = F.mse_loss(cq1, tv)
-        c2_loss = F.mse_loss(cq2, tv)
+        c1_loss = nn.MSELoss()(cq1, tv)
+        c2_loss = nn.MSELoss()(cq2, tv)
         
         self.critic1_optimizer.zero_grad()
         c1_loss.backward()
@@ -582,8 +493,9 @@ class SACAgent:
         
         return a_loss.item(), c1_loss.item(), c2_loss.item()
 
+
 #######################################
-## PATH CLAMP & MPC HELPER FUNCTIONS ##
+## PATH CLAMP & HELPER FUNCTIONS ##
 #######################################
 def compute_vectors_with_angle_clamp(raw_action: np.ndarray, 
                                    max_diff_deg: float = 10.0) -> np.ndarray:
@@ -611,198 +523,43 @@ def clamp_vector_angle_diff(prev_angle: float, desired_angle: float,
     return prev_angle + np.clip(angle_diff, -max_diff_rad, max_diff_rad)
 
 
-############################
-##     MPC CONTROLLER     ##
-############################
-
-def MPC_controller(path: np.ndarray, desiredVelocity: float, timeStep: float, totalSteps: int, horizonLength: int, stateCost: np.ndarray, inputCost: np.ndarray, terminalCost: np.ndarray, current_vel_x: float = 0.0, current_vel_y: float = 0.0) -> np.ndarray:
+#############################################
+##        SIMPLE MOVEMENT CONTROLLER       ##
+#############################################
+def get_steering_and_speed(
+    target_x: float,
+    target_y: float,
+    car_x: float,
+    car_y: float,
+    car_theta: float
+) -> np.ndarray:
     """
-    Computes control input(x and y acceleration) at each timeStep along path
-    
-    :param path: Array of vectors of projected path car should follow. Should start at current x, y coordinates of car
-    :param desiredVelocity: Desired constant speed along the track
-    :param timeStep: Time step (seconds), how often our simulation will update
-    :param totalSteps: Total simulation steps, how long the simulation will run
-    :param horizonLength: MPC horizon (number of steps), how far ahead the controller plans
-    :param stateCost: MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
-    :param inputCost: MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
-    :param terminalCost: MPC cost weights, penalizes deviations from the reference trajectory (the vectorized path)
-    :param current_vel_x: Current x-velocity of the car
-    :param current_vel_y: Current y-velocity of the car
+    Simple movement controller that aims the car toward (target_x, target_y).
 
-    :return: An array of [x_acceleration, y_acceleration] for the converter
+    Computes the desired heading and then returns:
+       - steering: difference between desired heading and current heading (clipped to [-1, 1])
+       - speed: proportional to (1 - |steering|) scaled and clipped.
     """
-    # Calculates the distance between each pair of points along path, and adds them all to one cumulative arc length
-    dists = [0]
-    for i in range(1, len(path)):
-        dists.append(dists[-1] + np.linalg.norm(path[i] - path[i-1]))
-    dists = np.array(dists)
+    desired_heading = np.arctan2(target_y - car_y, target_x - car_x)
+    steering = desired_heading - car_theta
+    steering = np.clip(steering, -1, 1)
+    speed = 4.0 * (1 - np.abs(steering))
+    speed = np.clip(speed, 0.0, 6.0)
+    return np.array([[steering, speed]])
 
-    '''
-    Cublic Splines are cubic functions used to interpolate between points, maintaining smoothness
-    between the points. This is useful for creating the paths for this project.
-    '''
-    # Uses the cubic spline function to interpolate between the points on the track
-    cs_x = CubicSpline(dists, path[:, 0])
-    cs_y = CubicSpline(dists, path[:, 1])
-
-    # 2D double-integrator model:
-    # State: [x, y, vx, vy]; Control: [ax, ay]
-    A = np.array([[1, 0, timeStep, 0],
-                [0, 1, 0, timeStep],
-                [0, 0, 1,  0],
-                [0, 0, 0,  1]])
-    B = np.array([[0.5*timeStep**2, 0],
-                [0, 0.5*timeStep**2],
-                [timeStep, 0],
-                [0, timeStep]])
-
-    # Precompute the reference trajectory along the drawn track.
-    # For each simulation time (plus horizon), compute the reference state.
-    # We use s = v_des * t (i.e., the distance along the track increases at constant speed).
-    ref_traj = np.zeros((totalSteps + horizonLength + 1, 4)) # 4x4 Array to store the reference trajectory at each time step (+ the horizon)
-    for i in range(totalSteps + horizonLength + 1):
-        t = i * timeStep # Current time
-        s = desiredVelocity * t  # arc-length traveled along the track
-
-        # If s exceeds the maximum distance of the drawn track, hold the last point.
-        if s > dists[-1]:
-            s = dists[-1]
-        
-        # Compute the reference position from the spline.
-        x_ref = cs_x(s)
-        y_ref = cs_y(s)
-        
-        # Compute the derivative (velocity components) from the spline derivatives.
-        vx_ref = cs_x.derivative()(s)
-        vy_ref = cs_y.derivative()(s)
-        
-        # Optionally normalize the velocity to the desired speed.
-        speed = np.hypot(vx_ref, vy_ref) # Calculates magnitue of the velocity vector
-        if speed > 1e-3:
-            vx_ref = desiredVelocity * vx_ref / speed
-            vy_ref = desiredVelocity * vy_ref / speed
-        else:
-            vx_ref = 0
-            vy_ref = 0
-        
-        ref_traj[i, :] = np.array([x_ref, y_ref, vx_ref, vy_ref])
-
-    u_history = [] # Record of control inputs at each timeStep
-    state_history = [] # Record of car state at each timeStep
-
-    # Set the initial state.
-    # Here we start at the first point of the drawn track, with current velocity.
-    x_current = np.array([path[0, 0], path[0, 1], current_vel_x, current_vel_y])
-    state_history.append(x_current)
-
-    # Iterates through the simulation steps
-    for t in range(totalSteps):
-        # Define cvxpy variables for the state and control over the horizon.
-        x = cp.Variable((4, horizonLength+1)) # Array to store the state at each time step
-        u = cp.Variable((2, horizonLength)) # Array to store the control input at each time step
-        
-        cost = 0
-        constraints = []
-        
-        # Initial condition for the horizon. ensuring the first state in the horizon = the current state
-        constraints += [x[:, 0] == x_current]
-        
-        # Build the cost function and dynamics constraints over the horizon.
-        for k in range(horizonLength):
-            ref_state = ref_traj[t + k] # The reference state at the current step in the horizon
-            cost += cp.quad_form(x[:, k] - ref_state, stateCost) + cp.quad_form(u[:, k], inputCost) # Adds a penalty to any deviation from the reference state and control input
-            constraints += [x[:, k+1] == A @ x[:, k] + B @ u[:, k]] # Constraints on the state dynamics
-            constraints += [u[:, k] <= np.array([1.0, 1.0]),
-                            u[:, k] >= np.array([-1.0, -1.0])] # Constraints on the control inputs (between -1 & 1)
-        
-        # Terminal cost for the final state in the horizon.
-        ref_state_terminal = ref_traj[t + horizonLength]
-        cost += cp.quad_form(x[:, horizonLength] - ref_state_terminal, terminalCost)
-        
-        # Solve the MPC optimization problem.
-        prob = cp.Problem(cp.Minimize(cost), constraints)
-        prob.solve(solver=cp.OSQP, warm_start=True)
-        
-        # Extract the first control input from the optimal sequence.
-        u_apply = u[:, 0].value
-        if u_apply is None:
-            u_apply = np.zeros(2)
-        u_history.append(u_apply)
-
-        # Update the current state using the system dynamics.
-        x_current = A @ x_current + B @ u_apply
-
-        state_history.append(x_current)
-    
-    # u_history and state_history can be combined into state_history. Optional
-    u_history = np.array(u_history)
-    state_history = np.array(state_history)
-
-    return np.array(u_history)
-
-def MPC_converter(x_accel: float, y_accel: float, current_speed: float, current_steer: float, max_steer: float, max_accel: float, max_velo: float, min_velo: float) -> np.ndarray:
-    """
-    Takes MPC Controller control inputs(x and y accelration) and convertes them into a 1D Array of [steering, thrust]
-    
-    :param x_accel: MPC calculated x-acceleration of car
-    :param y_accel: MPC calculated y-acceleration of car
-    :param current_speed: Current speed of car
-    :param current_steer: Current steering angle of car
-    :param max_steer: Maximum possible steering angle of car
-    :param max_accel: Maximum possible acceleration of car
-    :param max_velo: Maximum possible velocity of car (forwards)
-    :param min_velo: Minimum possible velocity of car (backwards)
-
-    :return: A 1D array [steering, thrust] for the simulator step.
-    """
-    print(f"curr speed {current_speed}")
-    print(f"curr steer {current_steer}")
-
-    target_angle = np.arctan2(y_accel, x_accel)
-    angle_diff = (target_angle - current_steer + np.pi) % (2*np.pi) - np.pi
-    steering = np.clip(angle_diff, -max_steer, max_steer)
-    
-    # Calculate the forward acceleration using sin and cos based on angle difference
-    angle_diff_rad = angle_diff  # angle_diff is already in radians
-    forward_accel = np.sqrt(x_accel**2 + y_accel**2)
-
-    # Project the forward acceleration onto the direction of the current steering angle
-    adjusted_accel = forward_accel * np.cos(angle_diff_rad)
-
-    # Multiply by max_accel to scale the acceleration
-    throttle = adjusted_accel * max_accel
-    
-    # Check if the current speed is near the maximum speed, if so, set throttle to 0
-    if current_speed >= max_velo * 0.95:  # 95% of max velocity, you can adjust the threshold
-        throttle = 0
-    else:
-        throttle = np.clip(forward_accel, -max_accel, max_accel)
-
-    return np.array([steering, throttle])
 
 def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=1):
     """
     Detects if the car is about to collide with an obstacle.
-    
-    :param fill_bitmap: The filled bitmap image of the environment.
-    :param car_x: Current car X position.
-    :param car_y: Current car Y position.
-    :param neighborhood_check: The number of pixels to check around the car.
-    :return: True if a collision is imminent, False otherwise.
     """
-
     h, w = fill_bitmap.shape
     for dy in range(-neighborhood_check, neighborhood_check+1):
         for dx in range(-neighborhood_check, neighborhood_check+1):
-            # Skip the car's exact center pixel
             if dx == 0 and dy == 0:
                 continue
-
             nx = car_x + dx
             ny = car_y + dy
             if 0 <= nx < w and 0 <= ny < h:
-                # If a neighbor is white => off-track/collision
                 if fill_bitmap[ny, nx] == 255:
                     return True
     return False
@@ -810,21 +567,11 @@ def detect_collison(fill_bitmap, car_x, car_y, neighborhood_check=1):
 
 def get_wall_normal(fill_bitmap, car_x, car_y, region=10):
     """
-
-    :param fill_bitmap: The filled bitmap image of the environment.
-    :param car_x: Current car X position.
-    :param car_y: Current car Y position.
-    :param region: The maximum distance to search for a black pixel.
-    :return: A 1D array representing the wall normal.
+    Computes the wall normal vector from the environment bitmap.
     """
-    # 1. Canny Edge Detection
     edges = cv2.Canny(fill_bitmap, threshold1=50, threshold2=150)
-
-    # 2. Sobel Gradients
     grad_x = cv2.Sobel(fill_bitmap, cv2.CV_32F, 1, 0, ksize=3)
     grad_y = cv2.Sobel(fill_bitmap, cv2.CV_32F, 0, 1, ksize=3)
-
-    # 3. Gather gradient vectors at edges near (cx, cy)
     h, w = fill_bitmap.shape
     x0 = max(0, car_x - region)
     x1 = min(w, car_x + region + 1)
@@ -834,7 +581,7 @@ def get_wall_normal(fill_bitmap, car_x, car_y, region=10):
     grad_vectors = []
     for y in range(y0, y1):
         for x in range(x0, x1):
-            if edges[y, x] == 255:  # It's an edge pixel
+            if edges[y, x] == 255:
                 gx = grad_x[y, x]
                 gy = grad_y[y, x]
                 if not (abs(gx) < 1e-5 and abs(gy) < 1e-5):
@@ -843,112 +590,72 @@ def get_wall_normal(fill_bitmap, car_x, car_y, region=10):
     if len(grad_vectors) == 0:
         return np.array([0.0, 0.0])
 
-    # 4. Average the gradient vectors
     arr = np.array(grad_vectors, dtype=np.float32)
     mean_grad = np.mean(arr, axis=0)
-
-    # 5. Normalize
     norm = np.linalg.norm(mean_grad) + 1e-8
     mean_grad /= norm
-
-    # By default, the gradient points from darker to brighter.
-    # If your "normal" should point inward or outward, you might flip or rotate:
-    # For example, normal = mean_grad, or normal = -mean_grad, etc.
     normal = mean_grad
-
     return normal
 
 
 def compute_collision_angle(wall_normal, car_direction_vec=np.array([0,1])):
     """
-    Returns the angle (in degrees) between direction_vec and wall_normal.
-
-    :param car_direction_vec: The direction vector of the car.
-    :param wall_normal: The normal vector of the wall.
-    :return: The angle in degrees.
+    Returns the angle (in degrees) between car direction and wall normal.
     """
     dot = np.dot(car_direction_vec, wall_normal)
-    # Both are unit vectors => no need to divide by norms
-    dot = np.clip(dot, -1.0, 1.0)  # numerical safety
+    dot = np.clip(dot, -1.0, 1.0)
     angle = np.degrees(np.arccos(dot))
     return angle
 
 def collision_angle_penalty(fill_bitmap, car_x, car_y):
     """
-    Check collision. If collision is detected, compute angle-based penalty.
-
-    :param fill_bitmap: The filled bitmap image of the environment.
-    :param car_x: Current X position.
-    :param car_y: Current Y position.
-    :return: The penalty value.
+    Computes an angle-based penalty if a collision is detected.
     """
     reward_delta = 0.0
     collided = detect_collison(fill_bitmap, car_x, car_y)
     if not collided:
-        return 0.0  # No collision => no penalty
+        return 0.0
 
     wall_normal = get_wall_normal(fill_bitmap, car_x, car_y)
     angle_deg = compute_collision_angle(wall_normal)
-    # Map angle to penalty
     penalty = np.interp(abs(angle_deg), [0, 90], [0.1, 1.0])
     reward_delta -= penalty
     return reward_delta
 
 def distance_from_row_center(fill_bitmap, car_x, car_y):
     """
-    Returns how far car_x is from the 'center' of the drivable area
-    on the row car_y in the fill_bitmap.
-
-    :param fill_bitmap: The filled bitmap image of the environment.
-    :param car_x: Current car X position.
-    :param car_y: Current car Y position.
-    :return: The distance from the center
+    Returns how far car_x is from the 'center' of the drivable area.
     """
     h, w = fill_bitmap.shape
-
-    # Safety check
     if not (0 <= car_y < h and 0 <= car_x < w):
-        return None  # Car is out of bounds
+        return None
 
-    # 1. Find left boundary
     left_edge = car_x
     while left_edge >= 0 and fill_bitmap[car_y, left_edge] == 255:
         left_edge -= 1
-    # Move one pixel into white area
     left_edge += 1
 
-    # 2. Find right boundary
     right_edge = car_x
     while right_edge < w and fill_bitmap[car_y, right_edge] == 255:
         right_edge += 1
-    # Move one pixel into white area
     right_edge -= 1
 
-    # If we found valid edges
     if left_edge < 0 or right_edge >= w or left_edge >= right_edge:
-        # Possibly means car is off track or no white area in that row
         return None
 
-    # 3. Midpoint
     midpoint = (left_edge + right_edge) / 2.0
-    # 4. Distance from center
     dist = abs(car_x - midpoint)
-    # 5. Return distance
     return dist
 
 def centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50):
     """
-    If the car is near the 'center' of the lane (in that row),
-    give higher reward. If far, give lower reward.
+    Computes a reward based on the car's proximity to the center of the lane.
     """
     dist = distance_from_row_center(fill_bitmap, car_x, car_y)
     if dist is None:
-        # Car might be off track => big penalty or zero reward
         return -1.0
 
-    # Normalize distance by half-lane width
-    norm_dist = dist / max_lane_halfwidth  # e.g., 0 = center, 1 = near boundary
-    # Reward could be: R = 1 - norm_dist (bounded to [0, 1] if dist <= max_lane_halfwidth)
+    norm_dist = dist / max_lane_halfwidth
     reward = max(0.0, 1.0 - norm_dist)
     return reward
 
@@ -956,10 +663,6 @@ def centerline_reward(fill_bitmap, car_x, car_y, max_lane_halfwidth=50):
 def render_arrow(env_renderer, flattened_path: np.ndarray):
     """
     Renders arrows along the planned path for visualization.
-    
-    Args:
-        env_renderer: The environment renderer (expects a pyglet batch).
-        flattened_path (np.ndarray): Flattened array of path points.
     """
     global arrow_graphics
     for arrow in arrow_graphics:
@@ -986,10 +689,10 @@ def render_callback(env_renderer):
     if current_planned_path is not None:
         render_arrow(env_renderer, current_planned_path)
 
-        
-##############################
-##      MAIN TRAINING LOOP  ##
-##############################
+
+###################################
+##      MAIN TRAINING LOOP       ##
+###################################
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
