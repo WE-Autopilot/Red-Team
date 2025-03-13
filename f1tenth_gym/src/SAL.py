@@ -7,11 +7,6 @@ import os
 import gym
 import cv2
 import random
-import bisect
-import pickle
-import math
-import time
-import pyglet
 from pyglet.gl import GL_LINES
 from collections import deque
 from typing import List, Tuple, Union
@@ -181,37 +176,45 @@ class SACF110Env(gym.Env):
         return path[1:]  # Skip initial point
 
     def _calculate_rewards(self, obs: dict, done: bool) -> dict:
-        """Calculate reward components"""
-        rewards = {
-            'base': 0.0,
-            'progress': 0.0,
-            'collision': 0.0,
-            'centering': 0.0
-        }
+        """Calculate reward components with adjustments for efficient learning."""
+        rewards = {}
 
-        # Collision detection
-        px, py = self._world_to_pixel(obs['poses_x'][0], obs['poses_y'][0])
-        collision = detect_collison(self.last_obs['lidar_bitmap'], px, py)
-        rewards['collision'] = -100.0 if collision else 0.0
+        # Time penalty: encourage faster completion.
+        rewards['time_penalty'] = -0.1
 
-        # Progress reward
+        # Progress reward: reward distance traveled with a higher multiplier.
         new_pos = np.array([obs['poses_x'][0], obs['poses_y'][0]])
         dist = np.linalg.norm(new_pos - self.prev_position)
-        rewards['progress'] = dist * 10.0
+        rewards['progress'] = dist * 15.0  # increased multiplier from 10.0 to 15.0
 
-        # Centering bonus
+        # Collision detection and penalty: use a heavy penalty plus an angle-based adjustment.
+        px, py = self._world_to_pixel(obs['poses_x'][0], obs['poses_y'][0])
+        collision = detect_collison(self.last_obs['lidar_bitmap'], px, py)
+        if collision:
+            # collision_angle_penalty returns a small negative value (more penalty for shallow angles)
+            angle_penalty = collision_angle_penalty(self.last_obs['lidar_bitmap'],
+                                                    int(obs['poses_x'][0]),
+                                                    int(obs['poses_y'][0]))
+            rewards['collision'] = -150.0 + angle_penalty  # base heavy penalty adjusted by angle
+        else:
+            rewards['collision'] = 0.0
+
+        # Centering bonus: reward staying near the center of the drivable area.
         centering = centerline_reward(
             fill_bitmap=self.last_obs['lidar_bitmap'],
             car_x=int(obs['poses_x'][0]),
             car_y=int(obs['poses_y'][0])
         )
-        rewards['centering'] = centering * 2.0
+        rewards['centering'] = centering * 3.0  # increased multiplier from 2.0 to 3.0
 
-        # Lap completion
+        # Lap completion bonus: encourage fast lap completion.
         if 'lap_time' in obs and obs['lap_time'] > 0:
-            rewards['lap'] = 500.0 - 10.0 * obs['lap_time']
+            rewards['lap'] = 600.0 - 15.0 * obs['lap_time']  # increased base reward and penalty rate
+        else:
+            rewards['lap'] = 0.0
 
         return rewards
+
 
     def _update_path_index(self, obs: dict):
         """Update waypoint index based on current position"""
@@ -604,18 +607,39 @@ def render_callback(env_renderer):
         render_arrow(env_renderer, current_planned_path)
 
 
-###################################
-##      MAIN TRAINING LOOP       ##
-###################################
+####################################################
+##      MAIN TRAINING LOOP  AND MODEL SAVING      ##
+####################################################
+
+def load_latest_checkpoint(agent, checkpoint_dir="checkpoints"):
+    if not os.path.exists(checkpoint_dir):
+        print("No checkpoints directory found. Starting from scratch.")
+        return
+    # Look for files that match our naming scheme, e.g., sac_actor_v*.pth
+    checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith("sac_actor_v") and f.endswith(".pth")]
+    if checkpoint_files:
+        # Sort by version number extracted from filename (e.g., v1, v2, etc.)
+        checkpoint_files.sort(key=lambda x: int(x.split("v")[1].split(".")[0]))
+        latest_checkpoint = checkpoint_files[-1]
+        checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
+        print(f"Loading latest checkpoint: {checkpoint_path}")
+        agent.actor.load_state_dict(torch.load(checkpoint_path))
+    else:
+        print("No checkpoint files found. Starting from scratch.")
+
+# In your main training loop, before starting training:
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     f110_env = gym.make('f110_gym:f110-v0', map='example_map', map_ext='.png',
                         num_agents=1, timestep=0.015)
     f110_env.add_render_callback(render_callback)
     
     env = SACF110Env(f110_env)
     agent = SACAgent(device, action_dim=16)
+    
+    # Try to resume from the latest checkpoint
+    load_latest_checkpoint(agent, checkpoint_dir="checkpoints")
+    
     replay_buffer = ReplayBuffer()
     
     max_episodes = 1000
@@ -623,6 +647,11 @@ def main():
     batch_size = 64
     update_after = 1000
     update_every = 50
+
+    # Ensure checkpoint directory exists
+    checkpoint_dir = "checkpoints"
+    if not os.path.exists(checkpoint_dir):
+        os.makedirs(checkpoint_dir)
     
     total_steps = 0
     for ep in range(max_episodes):
@@ -648,10 +677,17 @@ def main():
             if done:
                 break
         print(f"Episode {ep} Reward={ep_reward:.2f}")
+        
+        # Save checkpoint every 100 episodes
+        if (ep + 1) % 100 == 0:
+            version = (ep + 1) // 100
+            checkpoint_path = os.path.join(checkpoint_dir, f"sac_actor_v{version}.pth")
+            torch.save(agent.actor.state_dict(), checkpoint_path)
+            print(f"Saved checkpoint: {checkpoint_path}")
     
-    torch.save(agent.actor.state_dict(), "sac_actor.pth")
+    torch.save(agent.actor.state_dict(), os.path.join(checkpoint_dir, "sac_actor_final.pth"))
     cv2.destroyAllWindows()
-    print("Training complete, model saved as sac_actor.pth")
+    print("Training complete, model saved.")
 
 if __name__ == "__main__":
     main()
