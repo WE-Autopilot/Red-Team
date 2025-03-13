@@ -345,8 +345,8 @@ class SACAgent:
     Soft Actor-Critic agent for continuous control.
     """
     def __init__(self, device: torch.device, action_dim: int = 16, gamma: float = 0.99,
-                 tau: float = 0.005, alpha: float = 0.2, actor_lr: float = 3e-4,
-                 critic_lr: float = 3e-4):
+                 tau: float = 0.005, alpha: float = 0.2, actor_lr: float = 3e-3,
+                 critic_lr: float = 3e-3):
         self.device = device
         self.gamma = gamma
         self.tau = tau
@@ -707,9 +707,9 @@ def main():
                 break
         print(f"Episode {ep} Reward={ep_reward:.2f}")
         
-        # Save checkpoint every 50 episodes
-        if (ep + 1) % 50 == 0:
-            version = (ep + 1) // 50
+        # Save checkpoint every 25 episodes
+        if (ep + 1) % 25 == 0:
+            version = (ep + 1) // 25
             checkpoint_path = os.path.join(checkpoint_dir, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
