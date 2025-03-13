@@ -699,6 +699,7 @@ def main():
             total_steps += 1
             
             f110_env.render("human")
+
             cv2.imshow("LiDAR Bitmap", obs)
             cv2.waitKey(1)
             
