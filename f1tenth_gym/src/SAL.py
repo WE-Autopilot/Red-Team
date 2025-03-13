@@ -678,9 +678,9 @@ def main():
                 break
         print(f"Episode {ep} Reward={ep_reward:.2f}")
         
-        # Save checkpoint every 100 episodes
-        if (ep + 1) % 100 == 0:
-            version = (ep + 1) // 100
+        # Save checkpoint every 50 episodes
+        if (ep + 1) % 50 == 0:
+            version = (ep + 1) // 50
             checkpoint_path = os.path.join(checkpoint_dir, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
