@@ -8,7 +8,7 @@ import gym
 import cv2
 import random
 from collections import deque
-from typing import List, Tuple, Union
+from typing import Tuple
 from weap_util.lidar import lidar_to_bitmap
 
 # Global variables for rendering callbacks
@@ -166,9 +166,6 @@ class SACF110Env(gym.Env):
             new_y = path[-1][1] + global_dy
             path.append((new_x, new_y))
 
-            if self.f110_env.check_collision(new_x, new_y):  # Hypothetical map API
-                break
-            
         return path[1:]  # Skip initial point
 
     def _calculate_rewards(self, obs: dict, done: bool) -> dict:
