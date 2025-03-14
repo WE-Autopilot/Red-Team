@@ -74,7 +74,7 @@ def main(do_render: bool, render_speed="human_fast"):
     
     # initialize the environment and SAC Agent
     env = SACF110Env(f110_env)
-    agent = SACAgent(device, action_dim=16, actor_lr=3e-5, critic_lr=3e-5)
+    agent = SACAgent(device, action_dim=16)
     
     # Try to resume from the latest checkpoint
     load_latest_checkpoint(agent, CHECKPOINT_DIR)
