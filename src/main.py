@@ -15,7 +15,7 @@ CHECKPOINT_DIR = '../output/checkpoints'
 
 # training hyperparams
 BATCH_SIZE = 64
-UPDATE_EVERY = 50
+UPDATE_EVERY = 200
 UPDATE_AFTER = 1000
 
 def load_latest_checkpoint(agent, checkpoint_dir):
@@ -100,9 +100,9 @@ def main(do_render: bool, render_speed="human_fast"):
                 break
         print(f"Episode {ep} Reward={ep_reward:.2f}")
         
-        # Save a checkpoint every 25 episodes
-        if ep % 25 == 0:
-            version = ep // 25
+        # Save a checkpoint every "UPDATE_AFTER" episodes
+        if ep % UPDATE_AFTER == 0:
+            version = ep // UPDATE_AFTER
             checkpoint_path = os.path.join(CHECKPOINT_DIR, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
