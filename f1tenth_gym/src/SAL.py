@@ -20,6 +20,7 @@ current_planned_path = None
 ##     GYM ENVIRONMENT      ##
 ##############################
 
+
 class SACF110Env(gym.Env):
     """
     Custom F1Tenth environment with SAC integration and simple low-level control.
@@ -50,7 +51,8 @@ class SACF110Env(gym.Env):
         self.current_planned_path = None
         self.map_scale = 10.0  # pixels per meter
         self.map_origin = (128, 128)  
-
+    
+    
     def reset(self):
         """Reset environment with default pose and clear path history"""
         default_pose = np.array([[0.0, 0.0, 1.57]])  # x, y, theta
