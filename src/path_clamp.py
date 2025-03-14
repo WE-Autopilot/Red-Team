@@ -1,5 +1,5 @@
 #######################################
-## PATH CLAMP & HELPER FUNCTIONS ##
+## PATH CLAMP & HELPER FUNCTIONS     ##
 #######################################
 import numpy as np
 

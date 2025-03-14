@@ -32,7 +32,7 @@ class SACF110Env(gym.Env):
         super().__init__()
         self.f110_env = f110_env
         self.observation_space = gym.spaces.Box(low=0, high=255, 
-                                              shape=(256,256), dtype=np.uint8)
+                                              shape=(128,128), dtype=np.uint8)
         
         self.action_space = gym.spaces.Box(low=-1, high=1, 
                                            shape=(16,), dtype=np.float32)
@@ -48,8 +48,8 @@ class SACF110Env(gym.Env):
         self.last_obs = None
         self.prev_position = None
         self.current_planned_path = None
-        self.map_scale = 10.0  # pixels per meter
-        self.map_origin = (128, 128)  
+        self.map_scale = 2.5  # pixels per meter
+        self.map_origin = (32, 32)  
     
     
     def reset(self):
@@ -59,7 +59,7 @@ class SACF110Env(gym.Env):
         
         # Process initial observation
         lidar_scan = obs['scans'][0]
-        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
+        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(128, 128),
                                 bg_color='black', draw_mode="FILL", winding_dir='CW', starting_angle=np.pi/2)
         # Store the computed lidar bitmap in the observation
         obs['lidar_bitmap'] = bitmap
@@ -104,7 +104,7 @@ class SACF110Env(gym.Env):
 
         obs, base_reward, done, info = self.f110_env.step(action_out)
         lidar_scan = obs['scans'][0]
-        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(256,256),
+        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(128,128),
                                  bg_color='black', draw_mode="FILL", 
                                  winding_dir='CW', starting_angle=np.pi/2)
         obs['lidar_bitmap'] = bitmap
