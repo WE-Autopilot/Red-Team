@@ -16,7 +16,7 @@ CHECKPOINT_INTERVAL = 100 # after how many crashes do we save a checkpoint?
 
 # training hyperparams
 BATCH_SIZE = 64
-UPDATE_EVERY = 50
+UPDATE_EVERY = 200
 UPDATE_AFTER = 1000
 
 def load_latest_checkpoint(agent, checkpoint_dir):
