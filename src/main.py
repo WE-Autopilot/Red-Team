@@ -15,7 +15,7 @@ DO_RENDER = True
 RENDER_SPEED = 'human_fast' # either human or human_fast
 MAP_PATH = '../assets/example_map'
 CHECKPOINT_DIR = '../out/checkpoints'
-CHECKPOINT_INTERVAL = 2 # after how many crashes do we save a checkpoint?
+CHECKPOINT_INTERVAL = 1000 # after how many crashes do we save a checkpoint?
 
 # training hyperparams
 BATCH_SIZE = 64
