@@ -4,6 +4,7 @@ import gym
 import torch
 import random
 import gc
+import numpy 
 
 from sac_agent import SACAgent
 from replay_buffer import ReplayBuffer
@@ -25,14 +26,21 @@ def changeMap(f110_env):
 
     print("hi")
     value = random.randrange(0,5)
-    listOfMaps = ["maps/BrandsHatch_map","maps/Budapest_map","maps/IMS_map","maps/Spielberg_map","../assets/example_map"]
+    listOfMaps = {"maps/BrandsHatch_map": numpy.pi/5,
+                  "maps/Budapest_map":numpy.pi*5/6,
+                  "maps/IMS_map": numpy.pi/2,
+                  "maps/Spielberg_map": numpy.pi/6,
+                  "../assets/example_map": 1.57}
 
-    print(listOfMaps[value])
+    key, value = random.choice(list(listOfMaps.items()))
+
+    #print(listOfMaps[value])
     #f110_env.update_map(map_path = listOfMaps[value],map_ext = ".png")
 
-    f110_env = gym.make('f110_gym:f110-v0', map=listOfMaps[value], map_ext='.png', num_agents=1, timestep=0.015)
+    f110_env = gym.make('f110_gym:f110-v0', map=key, map_ext='.png', num_agents=1, timestep=0.015)
     env = SACF110Env(f110_env)
-    return env
+    
+    return env, value
 
 
 def load_latest_checkpoint(agent, checkpoint_dir):
@@ -67,6 +75,7 @@ def main(do_render: bool, render_speed="human_fast"):
 
     # create gym
     f110_env = gym.make('f110_gym:f110-v0', map=MAP_PATH, map_ext='.png', num_agents=1, timestep=0.015)
+
     
     # if we're rendering, add it
     if do_render:
@@ -86,12 +95,13 @@ def main(do_render: bool, render_speed="human_fast"):
     if not os.path.exists(CHECKPOINT_DIR):
         os.makedirs(CHECKPOINT_DIR)
     
+    value =  1.57
     # Infinite training loop
     ep = 0
     total_steps = 0
     while True:  
         ep += 1
-        obs = env.reset()
+        obs = env.reset(value)
         ep_reward = 0
 
         # idk what this does
@@ -123,8 +133,7 @@ def main(do_render: bool, render_speed="human_fast"):
             checkpoint_path = os.path.join(CHECKPOINT_DIR, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
-            env = changeMap(f110_env=f110_env)
-            #obs = env.reset()
+            env,value = changeMap(f110_env=f110_env)
 
 if __name__ == "__main__":
     main(DO_RENDER, RENDER_SPEED)

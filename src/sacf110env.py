@@ -6,11 +6,13 @@ from typing import Tuple
 import gym
 import numpy as np
 from weap_util.lidar import lidar_to_bitmap
+import random
 
 from path_clamp import compute_vectors_with_angle_clamp, clamp_vector_angle_diff
 from movement_controller import render_arrow, get_steering_and_speed, detect_collison, centerline_reward
 
 current_planned_path = None
+theta = 1.57
 
 def render_callback(env_renderer):
     """
@@ -52,9 +54,10 @@ class SACF110Env(gym.Env):
         self.map_origin = (32, 32)  
     
     
-    def reset(self):
+    def reset(self,theta = 1.57):
         """Reset environment with default pose and clear path history"""
-        default_pose = np.array([[0.0, 0.0, 1.57]])  # x, y, theta
+        self.theta = theta
+        default_pose = np.array([[0.0, 0.0, theta]])  # x, y, theta
         obs, _, _, _ = self.f110_env.reset(default_pose)
         
         # Process initial observation
@@ -105,7 +108,7 @@ class SACF110Env(gym.Env):
         if np.isclose(action_out[0, 1], 0.0, atol=1e-6):
             crash_penalty = -100.0
             info = {"crash": True, "reason": "velocity_zero"}
-            obs = self.reset()
+            obs = self.reset(self.theta)
             return obs, crash_penalty, True, info
 
         obs, base_reward, done, info = self.f110_env.step(action_out)
