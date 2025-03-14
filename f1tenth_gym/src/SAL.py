@@ -33,8 +33,9 @@ class SACF110Env(gym.Env):
         self.f110_env = f110_env
         self.observation_space = gym.spaces.Box(low=0, high=255, 
                                               shape=(256,256), dtype=np.uint8)
+        
         self.action_space = gym.spaces.Box(low=-1, high=1, 
-                                         shape=(32,), dtype=np.float32)
+                                           shape=(16,), dtype=np.float32)
         
         # Path planning parameters
         self.car_length = 0.3
@@ -165,6 +166,9 @@ class SACF110Env(gym.Env):
             new_y = path[-1][1] + global_dy
             path.append((new_x, new_y))
 
+            if self.f110_env.check_collision(new_x, new_y):  # Hypothetical map API
+                break
+            
         return path[1:]  # Skip initial point
 
     def _calculate_rewards(self, obs: dict, done: bool) -> dict:
@@ -179,6 +183,7 @@ class SACF110Env(gym.Env):
         collision = detect_collison(self.last_obs['lidar_bitmap'], car_x, car_y)
         if collision:
             rewards['collision'] = -300.0  # Heavy penalty for crashing
+            return rewards
         else:
             rewards['collision'] = 0.0
 
