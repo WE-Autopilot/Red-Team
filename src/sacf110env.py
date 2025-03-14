@@ -187,7 +187,9 @@ class SACF110Env(gym.Env):
         car_y = self.last_obs['lidar_bitmap'].shape[0] // 2
 
         # Collision penalty: Strong penalty if a collision is detected.
-        collision = detect_collison(self.last_obs['lidar_bitmap'], car_x, car_y)
+        current_bitmap = obs['lidar_bitmap']
+        collision = detect_collison(current_bitmap, car_x, car_y)
+
         if collision:
             rewards['collision'] = -300.0  # Heavy penalty for crashing
             return rewards
@@ -200,7 +202,7 @@ class SACF110Env(gym.Env):
         rewards['progress'] = dist * 25.0  # Increased multiplier rewards speed
 
         # Centering bonus: Reward the car for staying near the center of the drivable area.
-        centering = centerline_reward(self.last_obs['lidar_bitmap'], car_x, car_y)
+        centering = centerline_reward(current_bitmap, car_x, car_y)
         rewards['centering'] = centering * 10.0  # Higher weight emphasizes centering
 
         # Time penalty: Small constant penalty per step to encourage faster lap completion.
