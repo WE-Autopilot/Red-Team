@@ -28,7 +28,11 @@ def changeMap(f110_env):
     listOfMaps = ["maps/BrandsHatch_map","maps/Budapest_map","maps/IMS_map","maps/Spielberg_map","../assets/example_map"]
 
     print(listOfMaps[value])
-    f110_env.update_map(map_path = "./assets/example_map",map_ext = ".png")
+    #f110_env.update_map(map_path = listOfMaps[value],map_ext = ".png")
+
+    f110_env = gym.make('f110_gym:f110-v0', map=listOfMaps[value], map_ext='.png', num_agents=1, timestep=0.015)
+    env = SACF110Env(f110_env)
+    return env
 
 
 def load_latest_checkpoint(agent, checkpoint_dir):
@@ -119,7 +123,8 @@ def main(do_render: bool, render_speed="human_fast"):
             checkpoint_path = os.path.join(CHECKPOINT_DIR, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
-            changeMap(f110_env=f110_env)
+            env = changeMap(f110_env=f110_env)
+            #obs = env.reset()
 
 if __name__ == "__main__":
     main(DO_RENDER, RENDER_SPEED)
