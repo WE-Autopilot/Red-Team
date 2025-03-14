@@ -15,7 +15,7 @@ DO_RENDER = True
 RENDER_SPEED = 'human_fast'  # either 'human' or 'human_fast'
 MAP_PATH = '../assets/example_map'
 CHECKPOINT_DIR = '../out/checkpoints'
-CHECKPOINT_INTERVAL = 1000  # after how many episodes do we save a checkpoint?
+CHECKPOINT_INTERVAL = 500  # after how many episodes do we save a checkpoint?
 
 # Training hyperparams
 BATCH_SIZE = 128
