@@ -59,8 +59,14 @@ class SACF110Env(gym.Env):
         
         # Process initial observation
         lidar_scan = obs['scans'][0]
-        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(128, 128),
-                                bg_color='black', draw_mode="FILL", winding_dir='CW', starting_angle=np.pi/2)
+        bitmap = lidar_to_bitmap(
+            lidar_scan, 
+            output_image_dims=(128, 128),
+            bg_color='black', 
+            draw_mode="FILL", 
+            winding_dir='CW', 
+            starting_angle=np.pi/2
+        )
         # Store the computed lidar bitmap in the observation
         obs['lidar_bitmap'] = bitmap
         self.last_obs = obs
