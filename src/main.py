@@ -3,10 +3,22 @@ import os
 import cv2
 import gym
 import torch
+import random
+import gc
 
 from sac_agent import SACAgent
 from replay_buffer import ReplayBuffer
 from sacf110env import SACF110Env, render_callback
+
+
+def changeMap(f110_env):
+
+    print("hi")
+    value = random.randrange(0,5)
+    listOfMaps = ["maps/BrandsHatch_map","maps/Budapest_map","maps/IMS_map","maps/Spielberg_map","../assets/example_map"]
+
+    print(listOfMaps[value])
+    f110_env.update_map(map_path = "./assets/example_map",map_ext = ".png")
 
 def load_latest_checkpoint(agent, checkpoint_dir="../output/checkpoints"):
     if not os.path.exists(checkpoint_dir):
@@ -28,13 +40,12 @@ def load_latest_checkpoint(agent, checkpoint_dir="../output/checkpoints"):
 # In your main training loop, before starting training:
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    render_on = False
     f110_env = gym.make('f110_gym:f110-v0', map='../assets/example_map', map_ext='.png',
                         num_agents=1, timestep=0.015)
     
-    if render_on:
-        from pyglet.gl import GL_LINES
-        f110_env.add_render_callback(render_callback)
+    
+    from pyglet.gl import GL_LINES
+    f110_env.add_render_callback(render_callback)
     
     env = SACF110Env(f110_env)
     agent = SACAgent(device, action_dim=16)
@@ -81,11 +92,13 @@ def main():
         print(f"Episode {ep} Reward={ep_reward:.2f}")
         
         # Save a checkpoint every 25 episodes
-        if ep % 25 == 0:
+        if ep % 2 == 0:
             version = ep // 25
             checkpoint_path = os.path.join(checkpoint_dir, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
+            changeMap(f110_env=f110_env)
 
 if __name__ == "__main__":
     main()
+
