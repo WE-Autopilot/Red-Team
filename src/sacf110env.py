@@ -86,52 +86,67 @@ class SACF110Env(gym.Env):
     
     def step(self, raw_action: np.ndarray):
         """
-        Execute one timestep with SAC action and a simple steering controller.
+        Execute one timestep using the SAC action and a simple steering controller.
+        This version uses only our simplified reward signal:
+        - Positive reward proportional to incremental progress.
+        - Heavy penalty for crashes.
+        - A small time penalty each step.
         """
-        # Get current state
+        # Get current car state
         car_state = {
             'x': self.last_obs['poses_x'][0],
             'y': self.last_obs['poses_y'][0],
             'theta': self.last_obs['poses_theta'][0]
         }
 
-        # If no path exists, initialize full path
+        # Initialize path if needed
         if self.path_points is None:
             self._handle_path_update(raw_action, car_state)
 
-        # Use the first waypoint in the sliding window
+        # Use the first waypoint in the sliding window to compute the low-level action
         target_x, target_y = self.path_points[0]
         action_out = get_steering_and_speed(target_x, target_y,
                                             car_state['x'], car_state['y'],
                                             car_state['theta'])
-        
+
+        # If the computed speed is essentially zero, assume a crash (or stuck) and reset.
         if np.isclose(action_out[0, 1], 0.0, atol=1e-6):
-            crash_penalty = -100.0
+            crash_penalty = -400.0
             info = {"crash": True, "reason": "velocity_zero"}
             obs = self.reset(self.theta)
             return obs, crash_penalty, True, info
 
-        obs, base_reward, done, info = self.f110_env.step(action_out)
+        # Execute the low-level action in the underlying environment.
+        # We ignore its base reward and use our own.
+        obs, _, done, info = self.f110_env.step(action_out)
+
+        # Process the LiDAR scan to generate a bitmap observation.
         lidar_scan = obs['scans'][0]
-        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(128,128),
-                                 bg_color='black', draw_mode="FILL", 
-                                 winding_dir='CW', starting_angle=np.pi/2)
+        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(128, 128),
+                                bg_color='black', draw_mode="FILL",
+                                winding_dir='CW', starting_angle=np.pi/2)
         obs['lidar_bitmap'] = bitmap
 
+        # Compute our simplified reward:
+        # - If a collision is detected, return a heavy crash penalty.
+        # - Otherwise, reward progress (distance moved) and subtract a small time penalty.
         reward_components = self._calculate_rewards(obs, done)
-        if reward_components['collision'] < -150:
+        # If a severe collision penalty is applied, mark the episode done.
+        if reward_components.get('collision', 0.0) < -150:
             done = True
         total_reward = sum(reward_components.values())
 
-        # Instead of simply incrementing an index, shift the path if the current waypoint is reached.
+        # Update the path if the car has reached the current target waypoint.
         self._update_path_index(obs, raw_action)
-        
+
+        # Update state tracking.
         self.last_obs = obs
         self.prev_position = np.array([obs['poses_x'][0], obs['poses_y'][0]])
         self._update_path_visualization()
 
         return bitmap, total_reward, done, info
-    
+
+
     def _world_to_pixel(self, x: float, y: float) -> Tuple[int, int]:
        px = int(self.map_origin[0] + x * self.map_scale)
        py = int(self.map_origin[1] + y * self.map_scale)
@@ -179,41 +194,24 @@ class SACF110Env(gym.Env):
         return path[1:]  # Skip initial point
 
     def _calculate_rewards(self, obs: dict, done: bool) -> dict:
-        """Revised reward function to drive fast, stay centered, and avoid crashes."""
         rewards = {}
         
-        # Get the car's center in the LiDAR bitmap.
+        # Use the car's center in the LiDAR bitmap for collision detection.
         car_x = self.last_obs['lidar_bitmap'].shape[1] // 2
         car_y = self.last_obs['lidar_bitmap'].shape[0] // 2
-
-        # Collision penalty: Strong penalty if a collision is detected.
         current_bitmap = obs['lidar_bitmap']
-        collision = detect_collison(current_bitmap, car_x, car_y)
-
-        if collision:
-            rewards['collision'] = -300.0  # Heavy penalty for crashing
-            return rewards
+        
+        # Crash detection: Heavy penalty if collision detected.
+        if detect_collison(current_bitmap, car_x, car_y):
+            rewards['collision'] = -100.0  # Heavy penalty for crashing
+            return rewards  # No need to add other rewards if crashed.
         else:
             rewards['collision'] = 0.0
 
-        # Progress reward: Encourage fast movement along the track.
+        # Reward for progress: encourage fast movement.
         new_pos = np.array([obs['poses_x'][0], obs['poses_y'][0]])
-        dist = np.linalg.norm(new_pos - self.prev_position)
-        rewards['progress'] = dist * 25.0  # Increased multiplier rewards speed
-
-        # Centering bonus: Reward the car for staying near the center of the drivable area.
-        centering = centerline_reward(current_bitmap, car_x, car_y)
-        rewards['centering'] = centering * 10.0  # Higher weight emphasizes centering
-
-        # Time penalty: Small constant penalty per step to encourage faster lap completion.
-        rewards['time_penalty'] = -0.1
-
-        # Lap bonus (if available): Reward faster lap times.
-        if 'lap_time' in obs and obs['lap_time'] > 0:
-            rewards['lap'] = 200.0 - 20.0 * obs['lap_time']
-        else:
-            rewards['lap'] = 0.0
-
+        progress = np.linalg.norm(new_pos - self.prev_position)
+        rewards['progress'] = progress * 25.0  # Multiplier can be tuned for speed.
         return rewards
 
 
