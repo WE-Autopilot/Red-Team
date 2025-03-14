@@ -1,5 +1,4 @@
 import os
-
 import cv2
 import gym
 import torch
@@ -10,6 +9,17 @@ from sac_agent import SACAgent
 from replay_buffer import ReplayBuffer
 from sacf110env import SACF110Env, render_callback
 
+# Config
+DO_RENDER = True
+RENDER_SPEED = 'human_fast' # either human or human_fast
+MAP_PATH = '../assets/example_map'
+CHECKPOINT_DIR = '../out/checkpoints'
+CHECKPOINT_INTERVAL = 2 # after how many crashes do we save a checkpoint?
+
+# training hyperparams
+BATCH_SIZE = 64
+UPDATE_EVERY = 200
+UPDATE_AFTER = 1000
 
 def changeMap(f110_env):
 
@@ -20,17 +30,26 @@ def changeMap(f110_env):
     print(listOfMaps[value])
     f110_env.update_map(map_path = "./assets/example_map",map_ext = ".png")
 
-def load_latest_checkpoint(agent, checkpoint_dir="../output/checkpoints"):
+
+def load_latest_checkpoint(agent, checkpoint_dir):
+    # if there is no checkpoint dir, make it
     if not os.path.exists(checkpoint_dir):
-        print("No checkpoints directory found. Starting from scratch.")
+        print("No checkpoints directory found. Creating it..")
         return
+    
     # Look for files that match our naming scheme, e.g., sac_actor_v*.pth
     checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith("sac_actor_v") and f.endswith(".pth")]
+
+    # if there are checkpoint files, load the latest one
     if checkpoint_files:
         # Sort by version number extracted from filename (e.g., v1, v2, etc.)
         checkpoint_files.sort(key=lambda x: int(x.split("v")[1].split(".")[0]))
+
+        # get the latest one
         latest_checkpoint = checkpoint_files[-1]
         checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
+
+        # load it
         print(f"Loading latest checkpoint: {checkpoint_path}")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         agent.actor.load_state_dict(torch.load(checkpoint_path, map_location=device))
@@ -38,38 +57,40 @@ def load_latest_checkpoint(agent, checkpoint_dir="../output/checkpoints"):
         print("No checkpoint files found. Starting from scratch.")
 
 # In your main training loop, before starting training:
-def main():
+def main(do_render: bool, render_speed="human_fast"):
+    # find torch device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    f110_env = gym.make('f110_gym:f110-v0', map='../assets/example_map', map_ext='.png',
-                        num_agents=1, timestep=0.015)
+
+    # create gym
+    f110_env = gym.make('f110_gym:f110-v0', map=MAP_PATH, map_ext='.png', num_agents=1, timestep=0.015)
     
+    # if we're rendering, add it
+    if do_render:
+        f110_env.add_render_callback(render_callback)
     
-    from pyglet.gl import GL_LINES
-    f110_env.add_render_callback(render_callback)
-    
+    # initialize the environment and SAC Agent
     env = SACF110Env(f110_env)
-    agent = SACAgent(device, action_dim=16)
+    agent = SACAgent(device, action_dim=16, actor_lr=3e-5, critic_lr=3e-5)
     
     # Try to resume from the latest checkpoint
-    load_latest_checkpoint(agent, checkpoint_dir="../out/checkpoints")
+    load_latest_checkpoint(agent, CHECKPOINT_DIR)
     
+    # initialize replay buffer
     replay_buffer = ReplayBuffer()
     
-    batch_size = 64
-    update_after = 1000
-    update_every = 50
-
     # Ensure checkpoint directory exists
-    checkpoint_dir = "../out/checkpoints"
-    if not os.path.exists(checkpoint_dir):
-        os.makedirs(checkpoint_dir)
+    if not os.path.exists(CHECKPOINT_DIR):
+        os.makedirs(CHECKPOINT_DIR)
     
-    total_steps = 0
+    # Infinite training loop
     ep = 0
-    while True:  # Infinite training loop
+    total_steps = 0
+    while True:  
         ep += 1
         obs = env.reset()
         ep_reward = 0
+
+        # idk what this does
         while True:
             action = agent.select_action(obs)
             next_obs, reward, done, info = env.step(action)
@@ -79,12 +100,13 @@ def main():
             ep_reward += reward
             total_steps += 1
             
-            f110_env.render("human")
-            cv2.imshow("LiDAR Bitmap", obs)
-            cv2.waitKey(1)
+            if do_render:
+                f110_env.render(render_speed)
+                cv2.imshow("LiDAR Bitmap", obs)
+                cv2.waitKey(1)
             
-            if total_steps > update_after and total_steps % update_every == 0:
-                a_loss, c1_loss, c2_loss = agent.update(replay_buffer, batch_size)
+            if total_steps > UPDATE_AFTER and total_steps % UPDATE_EVERY == 0:
+                a_loss, c1_loss, c2_loss = agent.update(replay_buffer, BATCH_SIZE)
                 print(f"Step {total_steps}: Actor={a_loss:.4f}, Critic1={c1_loss:.4f}, Critic2={c2_loss:.4f}")
             
             if done:
@@ -92,13 +114,12 @@ def main():
         print(f"Episode {ep} Reward={ep_reward:.2f}")
         
         # Save a checkpoint every 25 episodes
-        if ep % 2 == 0:
-            version = ep // 25
-            checkpoint_path = os.path.join(checkpoint_dir, f"sac_actor_v{version}.pth")
+        if ep % CHECKPOINT_INTERVAL == 0:
+            version = ep // CHECKPOINT_INTERVAL
+            checkpoint_path = os.path.join(CHECKPOINT_DIR, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
             changeMap(f110_env=f110_env)
 
 if __name__ == "__main__":
-    main()
-
+    main(DO_RENDER, RENDER_SPEED)

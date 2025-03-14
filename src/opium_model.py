@@ -17,7 +17,7 @@ class Actor(nn.Module):
         self.conv1 = nn.Conv2d(1, 16, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(16, 32, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(32, 32, kernel_size=3, stride=1)
-        self.fc1 = nn.Linear(32 * 28 * 28, 512)
+        self.fc1 = nn.Linear(32 * 12 * 12, 512)
         self.fc_mean = nn.Linear(512, action_dim)
         self.fc_log_std = nn.Linear(512, action_dim)
         
@@ -49,7 +49,7 @@ class Critic(nn.Module):
         self.conv1 = nn.Conv2d(1, 16, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(16, 32, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(32, 32, kernel_size=3, stride=1)
-        self.fc1 = nn.Linear(32 * 28 * 28 + action_dim, 512)
+        self.fc1 = nn.Linear(32 * 12 * 12 + action_dim, 512)
         self.fc2 = nn.Linear(512, 1)
     
     def forward(self, x: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
