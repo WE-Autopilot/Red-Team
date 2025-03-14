@@ -651,9 +651,11 @@ def load_latest_checkpoint(agent, checkpoint_dir="checkpoints"):
         latest_checkpoint = checkpoint_files[-1]
         checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
         print(f"Loading latest checkpoint: {checkpoint_path}")
-        agent.actor.load_state_dict(torch.load(checkpoint_path))
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        agent.actor.load_state_dict(torch.load(checkpoint_path, map_location=device))
     else:
         print("No checkpoint files found. Starting from scratch.")
+
 
 # In your main training loop, before starting training:
 def main():
@@ -674,8 +676,6 @@ def main():
     
     replay_buffer = ReplayBuffer()
     
-    max_episodes = 1000
-    max_steps = 2000
     batch_size = 64
     update_after = 1000
     update_every = 50
@@ -686,10 +686,12 @@ def main():
         os.makedirs(checkpoint_dir)
     
     total_steps = 0
-    for ep in range(max_episodes):
+    ep = 0
+    while True:  # Infinite training loop
+        ep += 1
         obs = env.reset()
         ep_reward = 0
-        for st in range(max_steps):
+        while True:
             action = agent.select_action(obs)
             next_obs, reward, done, info = env.step(action)
             
@@ -699,7 +701,6 @@ def main():
             total_steps += 1
             
             f110_env.render("human")
-
             cv2.imshow("LiDAR Bitmap", obs)
             cv2.waitKey(1)
             
@@ -711,16 +712,12 @@ def main():
                 break
         print(f"Episode {ep} Reward={ep_reward:.2f}")
         
-        # Save checkpoint every 25 episodes
-        if (ep + 1) % 25 == 0:
-            version = (ep + 1) // 25
+        # Save a checkpoint every 25 episodes
+        if ep % 25 == 0:
+            version = ep // 25
             checkpoint_path = os.path.join(checkpoint_dir, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
-    
-    torch.save(agent.actor.state_dict(), os.path.join(checkpoint_dir, "sac_actor_final.pth"))
-    cv2.destroyAllWindows()
-    print("Training complete, model saved.")
 
 if __name__ == "__main__":
     main()
