@@ -11,7 +11,8 @@ from sacf110env import SACF110Env, render_callback
 DO_RENDER = True
 RENDER_SPEED = 'human_fast' # either human or human_fast
 MAP_PATH = '../assets/example_map'
-CHECKPOINT_DIR = '../output/checkpoints'
+CHECKPOINT_DIR = '../out/checkpoints'
+CHECKPOINT_INTERVAL = 100 # after how many crashes do we save a checkpoint?
 
 # training hyperparams
 BATCH_SIZE = 64
@@ -57,7 +58,7 @@ def main(do_render: bool, render_speed="human_fast"):
     
     # initialize the environment and SAC Agent
     env = SACF110Env(f110_env)
-    agent = SACAgent(device, action_dim=16)
+    agent = SACAgent(device, action_dim=16, actor_lr=3e-5, critic_lr=3e-5)
     
     # Try to resume from the latest checkpoint
     load_latest_checkpoint(agent, CHECKPOINT_DIR)
@@ -101,8 +102,8 @@ def main(do_render: bool, render_speed="human_fast"):
         print(f"Episode {ep} Reward={ep_reward:.2f}")
         
         # Save a checkpoint every 25 episodes
-        if ep % 25 == 0:
-            version = ep // 25
+        if ep % CHECKPOINT_INTERVAL == 0:
+            version = ep // CHECKPOINT_INTERVAL
             checkpoint_path = os.path.join(CHECKPOINT_DIR, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
