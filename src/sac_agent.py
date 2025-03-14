@@ -16,8 +16,8 @@ class SACAgent:
     Soft Actor-Critic agent for continuous control.
     """
     def __init__(self, device: torch.device, action_dim: int = 16, gamma: float = 0.99,
-                 tau: float = 0.01, alpha: float = 0.1, actor_lr: float = 1e-3,
-                 critic_lr: float = 1e-3):
+                 tau: float = 0.01, alpha: float = 0.1, actor_lr: float = 3e-4,
+                 critic_lr: float = 3e-4):
         self.device = device
         self.gamma = gamma
         self.tau = tau
