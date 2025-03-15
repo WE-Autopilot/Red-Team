@@ -10,7 +10,7 @@ import torch.nn.functional as F
 class Actor(nn.Module):
     """
     The Actor outputs a 32D continuous action (in [-1,1]) representing 16 local (x,y) increments.
-    Processes the 256x256 lidar bitmap through convolutional layers.
+    Processes the 128x128 lidar bitmap through convolutional layers.
     """
     def __init__(self, action_dim: int = 16):
         super().__init__()

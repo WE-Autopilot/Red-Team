@@ -201,7 +201,7 @@ class SACF110Env(gym.Env):
 
         # Collision detection: if a collision is detected, apply a heavy penalty.
         if detect_collison(current_bitmap, car_x, car_y):
-            rewards['collision'] = 0.0
+            rewards['collision'] = -300.0
             return rewards  # Skip progress/time rewards if crashed.
         else:
             rewards['collision'] = 0.0
@@ -211,8 +211,8 @@ class SACF110Env(gym.Env):
         progress = np.linalg.norm(new_pos - self.prev_position)
         rewards['progress'] = progress * 50.0  # Increased multiplier for strong incentive
 
-        # Progress for speed
-        dt = 0.015 # matches the timestep
+        # Reward for speed
+        dt = 0.015  # matches the timestep
         speed = progress / dt  # forward speed (m/s)
         rewards['speed'] = speed * 0.005  # Scale factor to reward high speeds
 

@@ -4,6 +4,7 @@ import gym
 import torch
 import random
 import numpy as np
+import matplotlib.pyplot as plt
 
 from sac_agent import SACAgent
 from replay_buffer import ReplayBuffer
@@ -11,8 +12,8 @@ from sacf110env import SACF110Env, render_callback
 
 # ----------------------------------------------------------------
 # Config
-DO_RENDER = True
-RENDER_SPEED = 'human_fast'  # either 'human' or 'human_fast'
+DO_RENDER = True  # We'll use rendering only for the LiDAR bitmap & learning graph
+RENDER_SPEED = 'human_fast'  # Not used since we don't render the full sim
 MAP_PATH = '../assets/example_map'
 CHECKPOINT_DIR = '../out/checkpoints'
 CHECKPOINT_INTERVAL = 500  # after how many episodes do we save a checkpoint?
@@ -20,7 +21,8 @@ CHECKPOINT_INTERVAL = 500  # after how many episodes do we save a checkpoint?
 # Training hyperparams
 BATCH_SIZE = 128
 UPDATE_EVERY = 50     # Update every environment step
-UPDATE_AFTER = 1000  # Start updating after 1000 transitions in replay
+UPDATE_AFTER = 1000   # Start updating after 1000 transitions in replay
+GRAPH_CHECKPOINT = 250 # output to graph ever 20 episodes
 # ----------------------------------------------------------------
 
 
@@ -48,8 +50,7 @@ def changeMap(old_f110_env):
                             map=key, map_ext='.png', 
                             num_agents=1, timestep=0.015)
     
-    # Optionally add rendering callback
-    # (Only do this if you want the new env to render as well)
+    # Do not add full sim rendering; we'll only show the LiDAR bitmap.
     # new_f110_env.add_render_callback(render_callback)
     
     # Wrap it in the custom environment
@@ -65,7 +66,6 @@ def load_latest_checkpoint(agent, checkpoint_dir):
         os.makedirs(checkpoint_dir)
         return
     
-    # Look for files matching "sac_actor_v*.pth"
     checkpoint_files = [f for f in os.listdir(checkpoint_dir)
                         if f.startswith("sac_actor_v") and f.endswith(".pth")]
     
@@ -81,25 +81,22 @@ def load_latest_checkpoint(agent, checkpoint_dir):
         print("No checkpoint files found. Starting from scratch.")
 
 
-def main(do_render: bool, render_speed="human_fast"):
-    # Find torch device
+def main(do_render: bool, render_speed="human_fast", num_episodes=1000):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Create initial gym env
+    # Create initial gym environment
     f110_env = gym.make('f110_gym:f110-v0', 
                         map=MAP_PATH, 
                         map_ext='.png', 
                         num_agents=1, 
                         timestep=0.015)
-
-    # If we're rendering, add the callback
-    if do_render:
-        f110_env.add_render_callback(render_callback)
     
-    # Wrap in our custom environment
+    # Do not add full sim rendering; we'll only show the LiDAR bitmap.
+    # if do_render:
+    #     f110_env.add_render_callback(render_callback)
+    
     env = SACF110Env(f110_env)
     
-    # Create the SAC Agent (with a smaller LR)
     agent = SACAgent(
         device=device, 
         action_dim=16, 
@@ -107,69 +104,71 @@ def main(do_render: bool, render_speed="human_fast"):
         critic_lr=3e-4
     )
     
-    # Try to resume from the latest checkpoint
     load_latest_checkpoint(agent, CHECKPOINT_DIR)
     
-    # Initialize replay buffer
     replay_buffer = ReplayBuffer()
     
-    # Training loop
-    ep = 0
-    total_steps = 0
-    # Arbitrary orientation for the first run
-    orientation = 1.57
+    # Lists for logging episode rewards and block averages
+    episode_rewards = []
+    block_avg_rewards = []
     
-    while True:
-        ep += 1
-        # Reset the environment
+    total_steps = 0
+    orientation = 1.57  # starting orientation
+    
+    # Setup real-time learning graph (updates every 300 episodes)
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(10, 5))
+    reward_line, = ax.plot([], [], label='Avg Episode Reward per 300 Episodes', marker='o')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Average Reward')
+    ax.set_title('Real-Time Learning: Average Reward (per 300 episodes)')
+    ax.legend()
+    
+    for ep in range(1, num_episodes+1):
         obs = env.reset(orientation)
         ep_reward = 0.0
         
-        while True:
-            # Select action
+        done = False
+        while not done:
             action = agent.select_action(obs)
-            
-            # Step the environment
             next_obs, reward, done, info = env.step(action)
-            
-            # Push transition to replay
             replay_buffer.push(obs, action, reward, next_obs, done)
-            
             obs = next_obs
             ep_reward += reward
             total_steps += 1
             
-            # Render if desired
             if do_render:
-                f110_env.render(render_speed)
                 cv2.imshow("LiDAR Bitmap", obs)
                 cv2.waitKey(1)
             
-            # Update if we have enough data
             if total_steps > UPDATE_AFTER and total_steps % UPDATE_EVERY == 0:
                 a_loss, c1_loss, c2_loss = agent.update(replay_buffer, BATCH_SIZE)
-                print(f"Step {total_steps}: "
-                      f"Actor={a_loss:.4f}, Critic1={c1_loss:.4f}, Critic2={c2_loss:.4f}")
-            
-            if done:
-                break
+                print(f"Step {total_steps}: Actor Loss={a_loss:.4f}, Critic1 Loss={c1_loss:.4f}, Critic2 Loss={c2_loss:.4f}")
         
-        if ep_reward != -300.0:
-            print(f"Episode {ep} Reward={ep_reward:.2f}")
-
+        episode_rewards.append(ep_reward)
+        print(f"Episode {ep} Reward={ep_reward:.2f}")
         
-        # Save a checkpoint every CHECKPOINT_INTERVAL episodes
+        # Update learning graph every 300 episodes by computing the block average
+        if ep % GRAPH_CHECKPOINT == 0:
+            block_avg = np.mean(episode_rewards[-GRAPH_CHECKPOINT:])
+            block_avg_rewards.append(block_avg)
+            # X-axis: use block numbers multiplied by 300 to represent the episode index at end of block
+            x_vals = np.arange(GRAPH_CHECKPOINT, GRAPH_CHECKPOINT*(len(block_avg_rewards)+1), GRAPH_CHECKPOINT)
+            reward_line.set_data(x_vals, block_avg_rewards)
+            ax.relim()
+            ax.autoscale_view()
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+        
         if ep % CHECKPOINT_INTERVAL == 0:
             version = ep // CHECKPOINT_INTERVAL
-            checkpoint_path = os.path.join(
-                CHECKPOINT_DIR, 
-                f"sac_actor_v{version}.pth"
-            )
+            checkpoint_path = os.path.join(CHECKPOINT_DIR, f"sac_actor_v{version}.pth")
             torch.save(agent.actor.state_dict(), checkpoint_path)
             print(f"Saved checkpoint: {checkpoint_path}")
-            
-            # Change the map (optional)
             f110_env, env, orientation = changeMap(f110_env)
+    
+    plt.ioff()
+    plt.show()
 
 
 if __name__ == "__main__":
