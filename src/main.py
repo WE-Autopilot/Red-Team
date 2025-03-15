@@ -154,7 +154,9 @@ def main(do_render: bool, render_speed="human_fast"):
             if done:
                 break
         
-        print(f"Episode {ep} Reward={ep_reward:.2f}")
+        if ep_reward != -300.0:
+            print(f"Episode {ep} Reward={ep_reward:.2f}")
+
         
         # Save a checkpoint every CHECKPOINT_INTERVAL episodes
         if ep % CHECKPOINT_INTERVAL == 0:

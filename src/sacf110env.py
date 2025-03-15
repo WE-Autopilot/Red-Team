@@ -83,14 +83,14 @@ class SACF110Env(gym.Env):
 
         return bitmap
 
-    
+        
     def step(self, raw_action: np.ndarray):
         """
         Execute one timestep using the SAC action and a simple steering controller.
-        This version uses only our simplified reward signal:
-        - Positive reward proportional to incremental progress.
-        - Heavy penalty for crashes.
-        - A small time penalty each step.
+        This version uses a simplified reward signal that:
+        - Heavily rewards forward progress.
+        - Treats very low forward velocity as a crash.
+        - Applies a small time penalty.
         """
         # Get current car state
         car_state = {
@@ -108,16 +108,16 @@ class SACF110Env(gym.Env):
         action_out = get_steering_and_speed(target_x, target_y,
                                             car_state['x'], car_state['y'],
                                             car_state['theta'])
-
-        # If the computed speed is essentially zero, assume a crash (or stuck) and reset.
-        if np.isclose(action_out[0, 1], 0.0, atol=1e-6):
-            crash_penalty = -400.0
-            info = {"crash": True, "reason": "velocity_zero"}
+        
+        # Here, if the computed speed is below 0.1, we assume the car has stopped.
+        if action_out[0, 1] < 0.1:
+            stop_penalty = -300.0
+            info = {"stop": True, "reason": "low_velocity"}
             obs = self.reset(self.theta)
-            return obs, crash_penalty, True, info
+            return obs, stop_penalty, True, info
 
         # Execute the low-level action in the underlying environment.
-        # We ignore its base reward and use our own.
+        # We ignore the base reward and use our own.
         obs, _, done, info = self.f110_env.step(action_out)
 
         # Process the LiDAR scan to generate a bitmap observation.
@@ -128,10 +128,8 @@ class SACF110Env(gym.Env):
         obs['lidar_bitmap'] = bitmap
 
         # Compute our simplified reward:
-        # - If a collision is detected, return a heavy crash penalty.
-        # - Otherwise, reward progress (distance moved) and subtract a small time penalty.
         reward_components = self._calculate_rewards(obs, done)
-        # If a severe collision penalty is applied, mark the episode done.
+        # If a severe crash penalty is applied, mark the episode done.
         if reward_components.get('collision', 0.0) < -150:
             done = True
         total_reward = sum(reward_components.values())
@@ -195,24 +193,34 @@ class SACF110Env(gym.Env):
 
     def _calculate_rewards(self, obs: dict, done: bool) -> dict:
         rewards = {}
-        
-        # Use the car's center in the LiDAR bitmap for collision detection.
+
+        # Get the car's center in the LiDAR bitmap.
         car_x = self.last_obs['lidar_bitmap'].shape[1] // 2
         car_y = self.last_obs['lidar_bitmap'].shape[0] // 2
         current_bitmap = obs['lidar_bitmap']
-        
-        # Crash detection: Heavy penalty if collision detected.
+
+        # Collision detection: if a collision is detected, apply a heavy penalty.
         if detect_collison(current_bitmap, car_x, car_y):
-            rewards['collision'] = -100.0  # Heavy penalty for crashing
-            return rewards  # No need to add other rewards if crashed.
+            rewards['collision'] = 0.0
+            return rewards  # Skip progress/time rewards if crashed.
         else:
             rewards['collision'] = 0.0
 
-        # Reward for progress: encourage fast movement.
+        # Heavily reward forward progress.
         new_pos = np.array([obs['poses_x'][0], obs['poses_y'][0]])
         progress = np.linalg.norm(new_pos - self.prev_position)
-        rewards['progress'] = progress * 25.0  # Multiplier can be tuned for speed.
+        rewards['progress'] = progress * 50.0  # Increased multiplier for strong incentive
+
+        # Progress for speed
+        dt = 0.015 # matches the timestep
+        speed = progress / dt  # forward speed (m/s)
+        rewards['speed'] = speed * 0.005  # Scale factor to reward high speeds
+
+        # Small time penalty to encourage quick progress.
+        rewards['time'] = -0.01
+
         return rewards
+
 
 
     def _update_path_index(self, obs: dict, raw_action: np.ndarray):
