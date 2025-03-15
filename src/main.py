@@ -12,8 +12,8 @@ from sacf110env import SACF110Env, render_callback
 
 # ----------------------------------------------------------------
 # Config
-DO_RENDER = True  # We'll use rendering only for the LiDAR bitmap & learning graph
-RENDER_SPEED = 'human_fast'  # Not used since we don't render the full sim
+DO_RENDER = True  # We'll render the LiDAR bitmap, sim view, and planned path arrows.
+RENDER_SPEED = 'human_fast'  # Use this speed for rendering.
 MAP_PATH = '../assets/example_map'
 CHECKPOINT_DIR = '../out/checkpoints'
 CHECKPOINT_INTERVAL = 7500  # after how many episodes do we save a checkpoint?
@@ -22,7 +22,7 @@ CHECKPOINT_INTERVAL = 7500  # after how many episodes do we save a checkpoint?
 BATCH_SIZE = 128
 UPDATE_EVERY = 50     # Update every environment step
 UPDATE_AFTER = 1000   # Start updating after 1000 transitions in replay
-GRAPH_CHECKPOINT = 250 # output to graph ever 20 episodes
+GRAPH_CHECKPOINT = 250 # output to graph every 250 episodes
 # ----------------------------------------------------------------
 
 
@@ -32,7 +32,6 @@ def changeMap(old_f110_env):
     along with the new custom environment and the chosen orientation angle.
     """
     if old_f110_env is not None:
-        # Optionally close the old environment to free resources
         old_f110_env.close()
     
     # Randomly pick a map and orientation
@@ -45,15 +44,13 @@ def changeMap(old_f110_env):
     }
     key, value = random.choice(list(listOfMaps.items()))
     
-    # Create the new low-level environment
     new_f110_env = gym.make('f110_gym:f110-v0', 
                             map=key, map_ext='.png', 
                             num_agents=1, timestep=0.015)
     
-    # Do not add full sim rendering; we'll only show the LiDAR bitmap.
-    # new_f110_env.add_render_callback(render_callback)
+    # Turn on sim rendering by adding the render callback.
+    new_f110_env.add_render_callback(render_callback)
     
-    # Wrap it in the custom environment
     new_env = SACF110Env(new_f110_env)
     
     return new_f110_env, new_env, value
@@ -81,19 +78,18 @@ def load_latest_checkpoint(agent, checkpoint_dir):
         print("No checkpoint files found. Starting from scratch.")
 
 
-def main(do_render: bool, render_speed="human_fast", num_episodes=1000):
+def main(do_render: bool, render_speed="human_fast"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Create initial gym environment
     f110_env = gym.make('f110_gym:f110-v0', 
                         map=MAP_PATH, 
                         map_ext='.png', 
                         num_agents=1, 
                         timestep=0.015)
     
-    # Do not add full sim rendering; we'll only show the LiDAR bitmap.
-    # if do_render:
-    #     f110_env.add_render_callback(render_callback)
+    # Turn on full sim rendering by adding the render callback.
+    if do_render:
+        f110_env.add_render_callback(render_callback)
     
     env = SACF110Env(f110_env)
     
@@ -108,23 +104,24 @@ def main(do_render: bool, render_speed="human_fast", num_episodes=1000):
     
     replay_buffer = ReplayBuffer()
     
-    # Lists for logging episode rewards and block averages
     episode_rewards = []
     block_avg_rewards = []
     
     total_steps = 0
     orientation = 1.57  # starting orientation
     
-    # Setup real-time learning graph (updates every 300 episodes)
+    # Setup real-time learning graph (updates every GRAPH_CHECKPOINT episodes)
     plt.ion()
     fig, ax = plt.subplots(figsize=(10, 5))
-    reward_line, = ax.plot([], [], label='Avg Episode Reward per 300 Episodes', marker='o')
+    reward_line, = ax.plot([], [], label='Avg Episode Reward per {} Episodes'.format(GRAPH_CHECKPOINT), marker='o')
     ax.set_xlabel('Episode')
     ax.set_ylabel('Average Reward')
-    ax.set_title('Real-Time Learning: Average Reward (per 300 episodes)')
+    ax.set_title('Real-Time Learning: Average Reward (per {} episodes)'.format(GRAPH_CHECKPOINT))
     ax.legend()
     
-    for ep in range(1, num_episodes+1):
+    ep = 0
+    while True:
+        ep += 1
         obs = env.reset(orientation)
         ep_reward = 0.0
         
@@ -138,6 +135,8 @@ def main(do_render: bool, render_speed="human_fast", num_episodes=1000):
             total_steps += 1
             
             if do_render:
+                # Render the sim view (if any) and the LiDAR bitmap.
+                f110_env.render(render_speed)
                 cv2.imshow("LiDAR Bitmap", obs)
                 cv2.waitKey(1)
             
@@ -146,15 +145,12 @@ def main(do_render: bool, render_speed="human_fast", num_episodes=1000):
                 print(f"Step {total_steps}: Actor Loss={a_loss:.4f}, Critic1 Loss={c1_loss:.4f}, Critic2 Loss={c2_loss:.4f}")
         
         episode_rewards.append(ep_reward)
-
         if ep_reward != -150:
             print(f"Episode {ep} Reward={ep_reward:.2f}")
         
-        # Update learning graph every 300 episodes by computing the block average
         if ep % GRAPH_CHECKPOINT == 0:
             block_avg = np.mean(episode_rewards[-GRAPH_CHECKPOINT:])
             block_avg_rewards.append(block_avg)
-            # X-axis: use block numbers multiplied by 300 to represent the episode index at end of block
             x_vals = np.arange(GRAPH_CHECKPOINT, GRAPH_CHECKPOINT*(len(block_avg_rewards)+1), GRAPH_CHECKPOINT)
             reward_line.set_data(x_vals, block_avg_rewards)
             ax.relim()

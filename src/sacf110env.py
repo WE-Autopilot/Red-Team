@@ -41,7 +41,7 @@ class SACF110Env(gym.Env):
         
         # Path planning parameters
         self.car_length = 0.3
-        self.vector_length = 0.5
+        self.vector_length = 0.5/2
         self.path_points = None
         self.sub_index = 16
         self.pending_action = None
