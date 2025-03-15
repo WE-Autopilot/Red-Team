@@ -199,13 +199,6 @@ class SACF110Env(gym.Env):
         car_y = self.last_obs['lidar_bitmap'].shape[0] // 2
         current_bitmap = obs['lidar_bitmap']
 
-        # Collision detection: if a collision is detected, apply a heavy penalty.
-        if detect_collison(current_bitmap, car_x, car_y):
-            rewards['collision'] = -300.0
-            return rewards  # Skip progress/time rewards if crashed.
-        else:
-            rewards['collision'] = 0.0
-
         # Heavily reward forward progress.
         new_pos = np.array([obs['poses_x'][0], obs['poses_y'][0]])
         progress = np.linalg.norm(new_pos - self.prev_position)
@@ -216,8 +209,6 @@ class SACF110Env(gym.Env):
         speed = progress / dt  # forward speed (m/s)
         rewards['speed'] = speed * 0.005  # Scale factor to reward high speeds
 
-        # Small time penalty to encourage quick progress.
-        rewards['time'] = -0.01
 
         return rewards
 
