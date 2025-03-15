@@ -209,6 +209,7 @@ class SACF110Env(gym.Env):
         speed = progress / dt  # forward speed (m/s)
         rewards['speed'] = speed * 0.005  # Scale factor to reward high speeds
 
+        rewards['time'] = 0.075
 
         return rewards
 
