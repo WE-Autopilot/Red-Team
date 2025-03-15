@@ -16,7 +16,7 @@ DO_RENDER = True  # We'll use rendering only for the LiDAR bitmap & learning gra
 RENDER_SPEED = 'human_fast'  # Not used since we don't render the full sim
 MAP_PATH = '../assets/example_map'
 CHECKPOINT_DIR = '../out/checkpoints'
-CHECKPOINT_INTERVAL = 500  # after how many episodes do we save a checkpoint?
+CHECKPOINT_INTERVAL = 7500  # after how many episodes do we save a checkpoint?
 
 # Training hyperparams
 BATCH_SIZE = 128
@@ -146,7 +146,9 @@ def main(do_render: bool, render_speed="human_fast", num_episodes=1000):
                 print(f"Step {total_steps}: Actor Loss={a_loss:.4f}, Critic1 Loss={c1_loss:.4f}, Critic2 Loss={c2_loss:.4f}")
         
         episode_rewards.append(ep_reward)
-        print(f"Episode {ep} Reward={ep_reward:.2f}")
+
+        if ep_reward != -150:
+            print(f"Episode {ep} Reward={ep_reward:.2f}")
         
         # Update learning graph every 300 episodes by computing the block average
         if ep % GRAPH_CHECKPOINT == 0:

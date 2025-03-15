@@ -111,7 +111,7 @@ class SACF110Env(gym.Env):
         
         # Here, if the computed speed is below 0.1, we assume the car has stopped.
         if action_out[0, 1] < 0.1:
-            stop_penalty = -300.0
+            stop_penalty = -150.0
             info = {"stop": True, "reason": "low_velocity"}
             obs = self.reset(self.theta)
             return obs, stop_penalty, True, info
