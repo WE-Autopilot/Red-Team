@@ -16,13 +16,13 @@ DO_RENDER = True  # We'll render the LiDAR bitmap, sim view, and planned path ar
 RENDER_SPEED = 'human_fast'  # Use this speed for rendering.
 MAP_PATH = '../assets/example_map'
 CHECKPOINT_DIR = '../out/checkpoints'
-CHECKPOINT_INTERVAL = 7500  # after how many episodes do we save a checkpoint?
+CHECKPOINT_INTERVAL = 1000  # after how many episodes do we save a checkpoint?
 
 # Training hyperparams
 BATCH_SIZE = 128
 UPDATE_EVERY = 50     # Update every environment step
 UPDATE_AFTER = 1000   # Start updating after 1000 transitions in replay
-GRAPH_CHECKPOINT = 250 # output to graph every 250 episodes
+GRAPH_CHECKPOINT = 5 # output to graph every 250 episodes
 # ----------------------------------------------------------------
 
 
@@ -96,8 +96,8 @@ def main(do_render: bool, render_speed="human_fast"):
     agent = SACAgent(
         device=device, 
         action_dim=16, 
-        actor_lr=3e-4, 
-        critic_lr=3e-4
+        actor_lr=3e-3, 
+        critic_lr=3e-3
     )
     
     load_latest_checkpoint(agent, CHECKPOINT_DIR)
