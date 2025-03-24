@@ -68,7 +68,7 @@ class SACF110Env(gym.Env):
             bg_color='black', 
             draw_mode="RAYS", 
             winding_dir='CW', 
-            starting_angle=self.theta-np.pi/2,
+            starting_angle=np.pi/2,
             fov=np.pi,
             target_beam_count=100
         )
@@ -130,7 +130,7 @@ class SACF110Env(gym.Env):
             bg_color='black',
             draw_mode="RAYS",
             winding_dir='CW', 
-            starting_angle=self.theta-np.pi/2,
+            starting_angle=np.pi/2,
             fov=np.pi,
             target_beam_count=100
         )

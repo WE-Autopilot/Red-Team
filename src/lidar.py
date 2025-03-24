@@ -69,14 +69,19 @@ def _lidar_to_bitmap(
     # Determine which points from scan to get
     # Select target beam count using linspace for accurate downsampling
     # Scan array is mapped to radius of car using indices | 0 points directly behind | (len(scan)-1)/2 points directly forward
-    start = (len(scan)-1)/4
-    stop = 3*(len(scan)-1)/4
+    scan_length = len(scan)-1
+    starting_angle_ratio = starting_angle / (2 * np.pi)
+    fov_ratio = fov / (2 * np.pi) - (starting_angle_ratio * dir)
+    start = scan_length * starting_angle_ratio
+    stop = scan_length * fov_ratio
+
     indices = np.linspace(start, stop, target_beam_count, dtype=int)
     data = np.array(scan)[indices]
 
     # Precompute angles for points to be drawn on bitmap
-    # 0 means to start drawing from left | Follows direction of winding_dir
-    angles = starting_angle + dir * fov * np.linspace(0, 1, target_beam_count)
+    # Starts drawing rays from left, adjust added_radians by radians to adjust where points are drawn
+    added_radians = 0
+    angles = added_radians + dir * fov * np.linspace(0, 1, target_beam_count)
 
     # Compute (x, y) positions
     center = np.array([output_image_dims[0] // 2, output_image_dims[1] // 2])
