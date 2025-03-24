@@ -68,8 +68,8 @@ class SACF110Env(gym.Env):
             bg_color='black', 
             draw_mode="RAYS", 
             winding_dir='CW', 
-            starting_angle=np.pi,
-            fov=np.pi,
+            starting_angle=0,
+            fov = np.pi,
             target_beam_count=5
         )
         # Store the computed lidar bitmap in the observation
@@ -130,7 +130,7 @@ class SACF110Env(gym.Env):
             bg_color='black',
             draw_mode="RAYS",
             winding_dir='CW', 
-            starting_angle=np.pi,
+            starting_angle=0,
             fov=np.pi,
             target_beam_count=5
         )

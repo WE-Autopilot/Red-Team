@@ -67,7 +67,8 @@ def _lidar_to_bitmap(
     dir = 1 if winding_dir == 'CCW' else -1
 
     # Select target beam count using linspace for accurate downsampling
-    indices = np.linspace(0, len(scan) - 1, target_beam_count, dtype=int)
+    # Halfed array vector gotten
+    indices = np.linspace((len(scan) - 1)/4, ((len(scan)-1)/2) + ((len(scan) - 1)/4), target_beam_count, dtype=int)
     data = np.array(scan)[indices]
 
     # Precompute angles
