@@ -68,10 +68,11 @@ def _lidar_to_bitmap(
 
     # Select target beam count using linspace for accurate downsampling
     # Halfed array vector gotten
-    indices = np.linspace((len(scan) - 1)/4, ((len(scan)-1)/2) + ((len(scan) - 1)/4), target_beam_count, dtype=int)
+    indices = np.linspace((len(scan)-1)/4, 3*(len(scan)-1)/4, target_beam_count, dtype=int)
     data = np.array(scan)[indices]
 
     # Precompute angles
+    starting_angle -= np.pi/2
     angles = starting_angle + dir * fov * np.linspace(0, 1, target_beam_count)
 
     # Compute (x, y) positions

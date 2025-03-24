@@ -68,9 +68,9 @@ class SACF110Env(gym.Env):
             bg_color='black', 
             draw_mode="RAYS", 
             winding_dir='CW', 
-            starting_angle=0,
-            fov = np.pi,
-            target_beam_count=5
+            starting_angle=self.theta,
+            fov=np.pi,
+            target_beam_count=100
         )
         # Store the computed lidar bitmap in the observation
         obs['lidar_bitmap'] = bitmap
@@ -130,9 +130,9 @@ class SACF110Env(gym.Env):
             bg_color='black',
             draw_mode="RAYS",
             winding_dir='CW', 
-            starting_angle=0,
+            starting_angle=self.theta,
             fov=np.pi,
-            target_beam_count=5
+            target_beam_count=100
         )
         obs['lidar_bitmap'] = bitmap
 
