@@ -5,7 +5,7 @@ from typing import Tuple
 
 import gym
 import numpy as np
-from weap_util.lidar import lidar_to_bitmap
+from lidar import lidar_to_bitmap
 import random
 
 from path_clamp import compute_vectors_with_angle_clamp, clamp_vector_angle_diff
@@ -66,9 +66,11 @@ class SACF110Env(gym.Env):
             lidar_scan, 
             output_image_dims=(128, 128),
             bg_color='black', 
-            draw_mode="FILL", 
+            draw_mode="RAYS", 
             winding_dir='CW', 
-            starting_angle=np.pi/2
+            starting_angle=np.pi,
+            fov=np.pi,
+            target_beam_count=5
         )
         # Store the computed lidar bitmap in the observation
         obs['lidar_bitmap'] = bitmap
@@ -122,9 +124,16 @@ class SACF110Env(gym.Env):
 
         # Process the LiDAR scan to generate a bitmap observation.
         lidar_scan = obs['scans'][0]
-        bitmap = lidar_to_bitmap(lidar_scan, output_image_dims=(128, 128),
-                                bg_color='black', draw_mode="FILL",
-                                winding_dir='CW', starting_angle=np.pi/2)
+        bitmap = lidar_to_bitmap(
+            lidar_scan, 
+            output_image_dims=(128, 128),
+            bg_color='black',
+            draw_mode="RAYS",
+            winding_dir='CW', 
+            starting_angle=np.pi,
+            fov=np.pi,
+            target_beam_count=5
+        )
         obs['lidar_bitmap'] = bitmap
 
         # Compute our simplified reward:
