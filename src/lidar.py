@@ -24,7 +24,7 @@ def _lidar_to_bitmap(
 
         winding_dir (str): The direction that the rays wind. Must either be CW or CCW in a right handed coord system.
         
-        starting_angle (float): The offset from the pos-x axis that points "up" or "forward.
+        starting_angle (float): Direction of where to begin drawing LiDAR points on bitmap. 0 is left, rotates based on winding_dir
         
         max_scan_radius (float | None): The maximum range expected from the scans. Used to scale the value into the image if given.
         
@@ -66,13 +66,16 @@ def _lidar_to_bitmap(
     # Direction factor
     dir = 1 if winding_dir == 'CCW' else -1
 
+    # Determine which points from scan to get
     # Select target beam count using linspace for accurate downsampling
-    # Halfed array vector gotten
-    indices = np.linspace((len(scan)-1)/4, 3*(len(scan)-1)/4, target_beam_count, dtype=int)
+    # Scan array is mapped to radius of car using indices | 0 points directly behind | (len(scan)-1)/2 points directly forward
+    start = (len(scan)-1)/4
+    stop = 3*(len(scan)-1)/4
+    indices = np.linspace(start, stop, target_beam_count, dtype=int)
     data = np.array(scan)[indices]
 
-    # Precompute angles
-    starting_angle -= np.pi/2
+    # Precompute angles for points to be drawn on bitmap
+    # 0 means to start drawing from left | Follows direction of winding_dir
     angles = starting_angle + dir * fov * np.linspace(0, 1, target_beam_count)
 
     # Compute (x, y) positions
