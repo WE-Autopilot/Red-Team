@@ -89,10 +89,15 @@ class F110LineSensorEnv(gym.Env):
         
         sensor_values = self._get_observation(obs_dict)[:-1]
         safety_penalty = sum([max(0, 1.0 - (v/2.0)) for v in sensor_values])
-        steering_penalty = abs(action[0]) * 0.1
+
+        # New steering alignment reward
+        # Quadratic penalty for steering away from 0, making it exponentially more costly
+        steering_penalty = (action[0] ** 2) * 0.5
+        # Optional: Add a small bonus for being close to 0 steering
+        steering_alignment_bonus = np.exp(-abs(action[0]) * 5)
         collision_penalty = 10.0 if self.f110.sim.agents[0].in_collision else 0.0
         
-        return speed_reward - safety_penalty - steering_penalty - collision_penalty
+        return speed_reward - safety_penalty - steering_penalty + steering_alignment_bonus - collision_penalty
 
     def render(self, mode='human'):
         return self.f110.render(mode)
