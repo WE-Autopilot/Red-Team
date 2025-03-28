@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from sac_agent import SACAgent
 from replay_buffer import ReplayBuffer
 from sacf110env import SACF110Env, render_callback
+import state_machine.py
 
 # ----------------------------------------------------------------
 # Config

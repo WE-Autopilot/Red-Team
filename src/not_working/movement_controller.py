@@ -5,6 +5,8 @@ import cv2
 import numpy as np
 from pyglet.gl import GL_LINES
 
+
+
 arrow_graphics = []
 
 def get_steering_and_speed(

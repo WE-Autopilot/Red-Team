@@ -5,6 +5,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.env_checker import check_env
 from f110_gym.envs.f110_env import F110Env
 
+
 class F110LineSensorEnv(gym.Env):
     """
     Simplified F110 environment with 5 line sensors for basic obstacle detection.
