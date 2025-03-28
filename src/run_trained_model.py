@@ -125,7 +125,7 @@ if __name__ == "__main__":
         map_path=MAP_PATH,
         max_steering=0.4,
         max_throttle=2,
-        max_episode_steps=10000000
+        max_episode_steps=1000000
     )
     
     # Load your pre-trained model (ensure the file name/extension is correct)
