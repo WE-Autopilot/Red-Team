@@ -91,8 +91,17 @@ class F110LineSensorEnv(gym.Env):
         safety_penalty = sum([max(0, 1.0 - (v/2.0)) for v in sensor_values])
         steering_penalty = abs(action[0]) * 0.1
         collision_penalty = 10.0 if self.f110.sim.agents[0].in_collision else 0.0
+
+        #Calculating the penalty if the car goes out of balancce
+        balance_penalty = abs((sensor_values[0] + sensor_values[1]) - (sensor_values[3] + sensor_values[4]))
+
+        reward = (speed_reward
+        - balance_penalty * 0.5  # penalty for imbalance
+        - steering_penalty
+        - collision_penalty
+        - safety_penalty)
         
-        return speed_reward - safety_penalty - steering_penalty - collision_penalty
+        return reward
 
     def render(self, mode='human'):
         return self.f110.render(mode)
