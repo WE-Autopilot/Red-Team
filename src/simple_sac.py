@@ -21,7 +21,7 @@ class F110LineSensorEnv(gym.Env):
         )
         
         # Sensor configuration (angles in degrees relative to car heading)
-        self.sensor_angles = [-60, -30, 0, 30, 60]
+        self.sensor_angles = np.arange(0,359)
         self.max_range = 10.0  # Maximum sensor range in meters
         
         # Observation space: 5 sensor readings + current speed
@@ -90,7 +90,7 @@ class F110LineSensorEnv(gym.Env):
         
         sensor_values = self._get_observation(obs_dict)[:-1]
         safety_penalty = sum([max(0, 1.0 - (v/2.0)) for v in sensor_values])
-        steering_penalty = abs(action[0]) * 0.1
+        steering_penalty = abs(action[0]) * 0.1 ## Take the current steering angle and the recommended steeringh model and cross prod them, and then * by speed, that's your penalty
         collision_penalty = 10.0 if self.f110.sim.agents[0].in_collision else 0.0
         
         return speed_reward - safety_penalty - steering_penalty - collision_penalty
