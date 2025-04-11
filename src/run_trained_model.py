@@ -3,6 +3,8 @@ import numpy as np
 import gym
 from stable_baselines3 import SAC
 from f110_gym.envs.f110_env import F110Env
+import pyglet
+import random
 
 class F110LineSensorEnv(gym.Env):
     """
@@ -41,11 +43,47 @@ class F110LineSensorEnv(gym.Env):
         self.max_episode_steps = max_episode_steps
         self.num_steps = 0
 
-    def reset(self):
+    def reset(self, angle=np.pi/2):
         self.num_steps = 0
-        init_pose = np.array([[0.0, 0.0, np.pi/2]])  # Starting position
+        init_pose = np.array([[0.0, 0.0, angle]])  # Starting position
         obs, _, _, _ = self.f110.reset(init_pose)
         return self._get_observation(obs)
+    
+    def map_reset(self):
+
+        maps = ["BrandsHatch","Budapest","example","IMS","Spielberg"]
+        index = random.randrange(0,5)
+        self.f110.update_map("/Users/alielgalad/Desktop/Red-Team/assets/"+maps[index]+"_map.yaml", ".png")
+
+        unit_Circle = np.array([0,np.pi/6,np.pi/4,np.pi/3,np.pi/2,2*np.pi/3,3*np.pi/4,5*np.pi/6,np.pi,7*np.pi/6,5*np.pi/4,4*np.pi/3,3*np.pi/2,5*np.pi/3,7*np.pi/4,11*np.pi/6])
+        distance = 0
+        best_angle = 0
+        for angle in unit_Circle:
+            observation = self.reset(angle=angle)
+            value_straight_ahead = observation[2]
+
+            if(value_straight_ahead>distance):
+                distance = value_straight_ahead
+                best_angle = angle
+
+            if(distance>=9.99):
+                best_angle = angle
+                break
+        
+
+
+        init_pose = np.array([[0.0, 0.0, best_angle]])  # Starting position
+        obs, _, _, _ = self.f110.reset(init_pose)
+        observation = self._get_observation(obs)
+
+        self.f110.renderer.poses = None 
+        self.f110.renderer.batch = pyglet.graphics.Batch()
+        self.f110.renderer.update_obs(obs)
+        self.f110.renderer.update_map("../assets/"+maps[index]+"_map",".png")
+
+        return observation
+
+
 
     def step(self, action):
         self.num_steps += 1
@@ -103,7 +141,10 @@ def demo_rendering(model, env):
     """
     obs = env.reset()
     done = False
+    steps = 0
+
     while not done:
+        steps=steps+1
         env.render("human_fast")
         
         action, _ = model.predict(obs)
@@ -115,6 +156,11 @@ def demo_rendering(model, env):
         if env.f110.sim.agents[0].in_collision:
             print("Collision detected! Ending run.")
             break
+
+
+        if steps%10 == 0:
+            obs = env.map_reset()
+
     
     env.close()
 
@@ -132,3 +178,5 @@ if __name__ == "__main__":
     model = SAC.load("f110_line_sensor_sac.zip")
     
     demo_rendering(model, env)
+
+    
