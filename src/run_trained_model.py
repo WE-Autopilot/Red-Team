@@ -22,7 +22,7 @@ class F110LineSensorEnv(gym.Env):
         )
         
         # Sensor configuration (angles in degrees relative to car heading)
-        self.sensor_angles = [-60, -30, 0, 30, 60]
+        self.sensor_angles = np.arange(0,359)
         self.max_range = 10.0  # Maximum sensor range in meters
         
         # Observation space: 5 sensor readings + current speed
@@ -60,7 +60,7 @@ class F110LineSensorEnv(gym.Env):
         best_angle = 0
         for angle in unit_Circle:
             observation = self.reset(angle=angle)
-            value_straight_ahead = observation[2]
+            value_straight_ahead = observation[0]
 
             if(value_straight_ahead>distance):
                 distance = value_straight_ahead
@@ -158,7 +158,7 @@ def demo_rendering(model, env):
             break
 
 
-        if steps%10 == 0:
+        if steps%100000 == 0:
             obs = env.map_reset()
 
     

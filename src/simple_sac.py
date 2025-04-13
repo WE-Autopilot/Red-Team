@@ -1,8 +1,11 @@
 import time
 import numpy as np
 import gym
+import pyglet
+import random
 from stable_baselines3 import SAC
 from stable_baselines3.common.env_checker import check_env
+from stable_baselines3.common.callbacks import BaseCallback
 from f110_gym.envs.f110_env import F110Env
 
 class F110LineSensorEnv(gym.Env):
@@ -42,12 +45,46 @@ class F110LineSensorEnv(gym.Env):
         self.max_episode_steps = max_episode_steps
         self.num_steps = 0
 
-    def reset(self):
+    def reset(self, angle = np.pi/2):
         self.num_steps = 0
-        init_pose = np.array([[0.0, 0.0, np.pi/2]])  # Starting position
+        init_pose = np.array([[0.0, 0.0, angle]])  # Starting position
         obs, _, _, _ = self.f110.reset(init_pose)
         return self._get_observation(obs)
 
+    def map_reset(self):
+    
+        maps = ["BrandsHatch","Budapest","example","IMS","Spielberg"]
+        index = random.randrange(0,5)
+        self.f110.update_map("/Users/alielgalad/Desktop/Red-Team/assets/"+maps[index]+"_map.yaml", ".png")
+
+        unit_Circle = np.array([0,np.pi/6,np.pi/4,np.pi/3,np.pi/2,2*np.pi/3,3*np.pi/4,5*np.pi/6,np.pi,7*np.pi/6,5*np.pi/4,4*np.pi/3,3*np.pi/2,5*np.pi/3,7*np.pi/4,11*np.pi/6])
+        distance = 0
+        best_angle = 0
+        for angle in unit_Circle:
+            observation = self.reset(angle=angle)
+            value_straight_ahead = observation[0]
+
+            if(value_straight_ahead>distance):
+                distance = value_straight_ahead
+                best_angle = angle
+
+            if(distance>=9.99):
+                best_angle = angle
+                break
+        
+
+
+        init_pose = np.array([[0.0, 0.0, best_angle]])  # Starting position
+        obs, _, _, _ = self.f110.reset(init_pose)
+        observation = self._get_observation(obs)
+
+        self.f110.renderer.poses = None 
+        self.f110.renderer.batch = pyglet.graphics.Batch()
+        self.f110.renderer.update_obs(obs)
+        self.f110.renderer.update_map("../assets/"+maps[index]+"_map",".png")
+
+        return observation
+    
     def step(self, action):
         self.num_steps += 1
         
@@ -97,6 +134,17 @@ class F110LineSensorEnv(gym.Env):
 
     def render(self, mode='human'):
         return self.f110.render(mode)
+    
+
+class CustomCallback(BaseCallback):
+    def __init__(self, verbose = 0):
+        super().__init__(verbose)
+
+    def _on_step(self):
+        if(self.num_timesteps%100000 == 0):
+            self.training_env.envs[0].map_reset()
+        return True
+
 
 def train_model():
     MAP_PATH = "../assets/example_map"  # Update with your map path
@@ -107,6 +155,7 @@ def train_model():
         max_throttle=1.0,
         max_episode_steps=1000
     )
+    callBack = CustomCallback()
     
     check_env(env)  # Verify that your environment adheres to Gym's interface
 
@@ -131,7 +180,7 @@ def train_model():
     try:
         # Train indefinitely in chunks of 100,000 timesteps.
         while True:
-            model.learn(total_timesteps=100000)
+            model.learn(total_timesteps=100000,callback=callBack)
             model.save("f110_line_sensor_sac")
     except KeyboardInterrupt:
         print("Training interrupted. Saving model...")
@@ -146,13 +195,19 @@ def demo_rendering(model, env):
     """
     obs = env.reset()
     done = False
+    steps = 0
+
     while not done:
+        steps=steps+1
         env.render("human_fast")
         
         action, _ = model.predict(obs)
         action[1] = 2  # Force high throttle
         
         obs, reward, done, info = env.step(action)
+
+        if steps%100000 == 0:
+             obs = env.map_reset()
     
     env.close()
 
