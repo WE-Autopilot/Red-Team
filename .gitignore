@@ -1,3 +1,5 @@
 /.venv
 __pycache__/
 /out/checkpoints/*
+f110_lidar_logs/
+f110_line_sensor_logs/

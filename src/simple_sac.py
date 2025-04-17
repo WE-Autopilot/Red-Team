@@ -5,9 +5,9 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.env_checker import check_env
 from f110_gym.envs.f110_env import F110Env
 
-class F110LineSensorEnv(gym.Env):
+class F110LidarEnv(gym.Env):
     """
-    Simplified F110 environment with 5 line sensors for basic obstacle detection.
+    F110 environment with 36 LIDAR sensors spaced 10 degrees each, and no max_range clipping.
     """
     def __init__(self, map_path, num_agents=1, timestep=0.01, max_steering=0.4, 
                  max_throttle=1.0, max_episode_steps=2000):
@@ -20,21 +20,17 @@ class F110LineSensorEnv(gym.Env):
             timestep=timestep
         )
         
-        # Sensor configuration (angles in degrees relative to car heading)
-        self.sensor_angles = np.arange(0,359)
-        self.max_range = 10.0  # Maximum sensor range in meters
-        
-        # Observation space: 5 sensor readings + current speed
+        # Observation: 36 LIDAR rays + normalized speed. Assuming F110's max lidar range is 20.0
         self.observation_space = gym.spaces.Box(
             low=0.0,
-            high=self.max_range,
-            shape=(len(self.sensor_angles) + 1,),
+            high=20.0,
+            shape=(36 + 1,),
             dtype=np.float32
         )
 
-        # Action space: [steering, throttle]
+        # Action space: [steering, throttle] with minimum throttle set at 0.4.
         self.action_space = gym.spaces.Box(
-            low=np.array([-max_steering, 0.4]),  # Minimum throttle to maintain speed
+            low=np.array([-max_steering, 0.4]),
             high=np.array([max_steering, max_throttle]),
             dtype=np.float32
         )
@@ -51,10 +47,10 @@ class F110LineSensorEnv(gym.Env):
     def step(self, action):
         self.num_steps += 1
         
-        # Ensure minimum throttle is maintained
+        # Ensure minimum throttle is maintained.
         action[1] = np.clip(action[1], 0.4, 1.0)
         
-        # Step the underlying environment
+        # Step the underlying environment.
         obs, _, done, info = self.f110.step(np.array([action]))
         
         observation = self._get_observation(obs)
@@ -66,31 +62,30 @@ class F110LineSensorEnv(gym.Env):
         return observation, reward, done, info
 
     def _get_observation(self, obs_dict):
-        """Process LIDAR scan into 5 sensor readings and add speed."""
-        scan = obs_dict['scans'][0]
-        sensor_readings = []
+        """Sample 36 LIDAR rays (every 10 degrees) and add normalized speed."""
+        scan = obs_dict['scans'][0]  # Original 1080-element scan
+        # Sample every 30th element to get 36 rays (1080/30 = 36)
+        sampled_scan = scan[::30]
         
-        # Convert angles to LIDAR indices
-        for angle in self.sensor_angles:
-            idx = int((angle + 135) / 0.25)  # Convert angle to LIDAR index
-            idx = np.clip(idx, 0, len(scan)-1)
-            distance = scan[idx] if scan[idx] < self.max_range else self.max_range
-            sensor_readings.append(distance)
+        # Normalized speed (0-1 scale, assuming max ~4 m/s)
+        speed = obs_dict['linear_vels_x'][0] / 4.0
+        normalized_speed = np.clip(speed, 0.0, 1.0)
         
-        # Add normalized speed (0-1 scale)
-        speed = obs_dict['linear_vels_x'][0] / 4.0  # Assuming max speed ~4 m/s
-        sensor_readings.append(np.clip(speed, 0.0, 1.0))
-        
-        return np.array(sensor_readings, dtype=np.float32)
+        return np.concatenate([sampled_scan, [normalized_speed]]).astype(np.float32)
 
     def _calculate_reward(self, obs_dict, action):
-        """Simple reward function encouraging speed and safety."""
+        """Reward function using the 36 sampled LIDAR rays."""
         speed = obs_dict['linear_vels_x'][0]
         speed_reward = speed * 0.2
         
-        sensor_values = self._get_observation(obs_dict)[:-1]
-        safety_penalty = sum([max(0, 1.0 - (v/2.0)) for v in sensor_values])
-        steering_penalty = abs(action[0]) * 0.1 ## Take the current steering angle and the recommended steeringh model and cross prod them, and then * by speed, that's your penalty
+        # Process sampled LIDAR for safety
+        scan = obs_dict['scans'][0]
+        sampled_scan = scan[::30]  # Same 36-ray sampling as observation
+        
+        # Penalize closeness to obstacles (under 2.0 meters)
+        safety_penalty = np.sum([max(0, 1.0 - (v / 2.0)) for v in sampled_scan])
+        
+        steering_penalty = abs(action[0]) * 0.1
         collision_penalty = 10.0 if self.f110.sim.agents[0].in_collision else 0.0
         
         return speed_reward - safety_penalty - steering_penalty - collision_penalty
@@ -101,14 +96,14 @@ class F110LineSensorEnv(gym.Env):
 def train_model():
     MAP_PATH = "../assets/example_map"  # Update with your map path
     
-    env = F110LineSensorEnv(
+    env = F110LidarEnv(
         map_path=MAP_PATH,
         max_steering=0.4,
         max_throttle=1.0,
         max_episode_steps=1000
     )
     
-    check_env(env)  # Verify that your environment adheres to Gym's interface
+    check_env(env)  # Verify that the environment adheres to Gym's interface
 
     # Define the network architecture for SAC.
     policy_kwargs = dict(
@@ -125,17 +120,22 @@ def train_model():
         learning_starts=100,
         batch_size=256,
         gamma=0.99,
-        tensorboard_log="./f110_line_sensor_logs"
+        tensorboard_log="./f110_lidar_logs"
     )
     
     try:
-        # Train indefinitely in chunks of 100,000 timesteps.
+        # Infinite training loop. Will only exit when an exception (crash or manual interrupt) occurs.
         while True:
             model.learn(total_timesteps=100000)
-            model.save("f110_line_sensor_sac")
+            # Optionally, include the timestep number in the save filename:
+            model.save("f110_lidar_sac")
+            print("Checkpoint saved.")
     except KeyboardInterrupt:
-        print("Training interrupted. Saving model...")
-        model.save("f110_line_sensor_sac")
+        print("Training interrupted! Saving the model before exit.")
+        model.save("f110_lidar_sac")
+    except Exception as e:
+        print(f"An error occurred: {e}\nSaving the model before exit.")
+        model.save("f110_lidar_sac")
     
     return model, env
 
