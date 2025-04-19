@@ -1,6 +1,9 @@
 import time
 import numpy as np
 import gym
+import pyglet
+import random
+import os
 from stable_baselines3 import SAC
 from f110_gym.envs.f110_env import F110Env
 import pyglet
@@ -22,7 +25,7 @@ class F110LineSensorEnv(gym.Env):
         )
         
         # Sensor configuration (angles in degrees relative to car heading)
-        self.sensor_angles = np.arange(0,359)
+        self.sensor_angles = np.arange(-134.645,134.645,9.97370976287)
         self.max_range = 10.0  # Maximum sensor range in meters
         
         # Observation space: 5 sensor readings + current speed
@@ -50,40 +53,41 @@ class F110LineSensorEnv(gym.Env):
         return self._get_observation(obs)
     
     def map_reset(self):
+ 
+         maps = ["BrandsHatch","Budapest","example","IMS","Spielberg"]
+         index = random.randrange(0,5)
 
-        maps = ["BrandsHatch","Budapest","example","IMS","Spielberg"]
-        index = random.randrange(0,5)
-        self.f110.update_map("/Users/alielgalad/Desktop/Red-Team/assets/"+maps[index]+"_map.yaml", ".png")
-
-        unit_Circle = np.array([0,np.pi/6,np.pi/4,np.pi/3,np.pi/2,2*np.pi/3,3*np.pi/4,5*np.pi/6,np.pi,7*np.pi/6,5*np.pi/4,4*np.pi/3,3*np.pi/2,5*np.pi/3,7*np.pi/4,11*np.pi/6])
-        distance = 0
-        best_angle = 0
-        for angle in unit_Circle:
-            observation = self.reset(angle=angle)
-            value_straight_ahead = observation[0]
-
-            if(value_straight_ahead>distance):
-                distance = value_straight_ahead
-                best_angle = angle
-
-            if(distance>=9.99):
-                best_angle = angle
-                break
-        
-
-
-        init_pose = np.array([[0.0, 0.0, best_angle]])  # Starting position
-        obs, _, _, _ = self.f110.reset(init_pose)
-        observation = self._get_observation(obs)
-
-        self.f110.renderer.poses = None 
-        self.f110.renderer.batch = pyglet.graphics.Batch()
-        self.f110.renderer.update_obs(obs)
-        self.f110.renderer.update_map("../assets/"+maps[index]+"_map",".png")
-
-        return observation
-
-
+         current_directory = os.getcwd()
+         map_path = os.path.abspath(os.path.join(current_directory, "..", "assets", maps[index] + "_map.yaml"))
+         self.f110.update_map(map_path, ".png")
+ 
+         unit_Circle = np.array([0,np.pi/6,np.pi/4,np.pi/3,np.pi/2,2*np.pi/3,3*np.pi/4,5*np.pi/6,np.pi,7*np.pi/6,5*np.pi/4,4*np.pi/3,3*np.pi/2,5*np.pi/3,7*np.pi/4,11*np.pi/6])
+         distance = 0
+         best_angle = 0
+         for angle in unit_Circle:
+             observation = self.reset(angle=angle)
+             value_straight_ahead = observation[14]
+ 
+             if(value_straight_ahead>distance):
+                 distance = value_straight_ahead
+                 best_angle = angle
+ 
+             if(distance>=9.99):
+                 best_angle = angle
+                 break
+         
+ 
+ 
+         init_pose = np.array([[0.0, 0.0, best_angle]])  # Starting position
+         obs, _, _, _ = self.f110.reset(init_pose)
+         observation = self._get_observation(obs)
+ 
+         self.f110.renderer.poses = None 
+         self.f110.renderer.batch = pyglet.graphics.Batch()
+         self.f110.renderer.update_obs(obs)
+         self.f110.renderer.update_map("../assets/"+maps[index]+"_map",".png")
+ 
+         return observation
 
     def step(self, action):
         self.num_steps += 1
@@ -109,9 +113,9 @@ class F110LineSensorEnv(gym.Env):
         
         # Convert angles to LIDAR indices
         for angle in self.sensor_angles:
-            idx = int((angle + 135) / 0.25)
+            idx = int((angle + 134.645) / (0.2493427440718179))  # Convert angle to LIDAR index
             idx = np.clip(idx, 0, len(scan)-1)
-            distance = scan[idx] if scan[idx] < self.max_range else self.max_range
+            distance = scan[idx] 
             sensor_readings.append(distance)
         
         # Add normalized speed (0-1 scale)
@@ -142,7 +146,6 @@ def demo_rendering(model, env):
     obs = env.reset()
     done = False
     steps = 0
-
     while not done:
         steps=steps+1
         env.render("human_fast")
@@ -157,10 +160,8 @@ def demo_rendering(model, env):
             print("Collision detected! Ending run.")
             break
 
-
-        if steps%100000 == 0:
-            obs = env.map_reset()
-
+        if steps%10000 == 0:
+             obs = env.map_reset()
     
     env.close()
 
