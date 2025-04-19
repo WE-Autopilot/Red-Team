@@ -90,39 +90,7 @@ class F110LineSensorEnv(gym.Env):
  
          return observation
 
-    def map_reset(self):
-    
-        maps = ["BrandsHatch","Budapest","example","IMS","Spielberg"]
-        index = random.randrange(0,5)
-        self.f110.update_map("/Users/alielgalad/Desktop/Red-Team/assets/"+maps[index]+"_map.yaml", ".png")
 
-        unit_Circle = np.array([0,np.pi/6,np.pi/4,np.pi/3,np.pi/2,2*np.pi/3,3*np.pi/4,5*np.pi/6,np.pi,7*np.pi/6,5*np.pi/4,4*np.pi/3,3*np.pi/2,5*np.pi/3,7*np.pi/4,11*np.pi/6])
-        distance = 0
-        best_angle = 0
-        for angle in unit_Circle:
-            observation = self.reset(angle=angle)
-            value_straight_ahead = observation[0]
-
-            if(value_straight_ahead>distance):
-                distance = value_straight_ahead
-                best_angle = angle
-
-            if(distance>=9.99):
-                best_angle = angle
-                break
-        
-
-
-        init_pose = np.array([[0.0, 0.0, best_angle]])  # Starting position
-        obs, _, _, _ = self.f110.reset(init_pose)
-        observation = self._get_observation(obs)
-
-        self.f110.renderer.poses = None 
-        self.f110.renderer.batch = pyglet.graphics.Batch()
-        self.f110.renderer.update_obs(obs)
-        self.f110.renderer.update_map("../assets/"+maps[index]+"_map",".png")
-
-        return observation
     
     def step(self, action):
         self.num_steps += 1
@@ -181,6 +149,9 @@ class CustomCallback(BaseCallback):
      def _on_step(self):
          if(self.num_timesteps%10000 == 0):
              self.training_env.envs[0].map_reset()
+        
+         if(self.num_timesteps%5000000 >= 0):
+             return False
          return True
 
 def train_model():
