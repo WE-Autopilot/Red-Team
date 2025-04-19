@@ -8,6 +8,10 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import BaseCallback
 from f110_gym.envs.f110_env import F110Env
+import torch
+
+print("CUDA available:", torch.cuda.is_available())
+print("CUDA device name:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A")
 
 class F110LineSensorEnv(gym.Env):
     """
@@ -150,17 +154,18 @@ class CustomCallback(BaseCallback):
          if(self.num_timesteps%10000 == 0):
              self.training_env.envs[0].map_reset()
         
-         if(self.num_timesteps%5000000 >= 0):
+         if(self.num_timesteps >= 5000000):
              return False
          return True
 
 def train_model():
-    print("Enter 1 or 2. " \
-    "1: To continue training last saved model" \
-    "2: To train a new model")
+    print("""
+    Enter 1 or 2.
+    1: To continue training last saved model
+    2: To train a new model
+    """)
     choice = input()
 
-    
     MAP_PATH = "../assets/example_map"  # Update with your map path
 
     env = F110LineSensorEnv(
@@ -188,15 +193,17 @@ def train_model():
             learning_starts=100,
             batch_size=256,
             gamma=0.99,
-            tensorboard_log="./f110_line_sensor_logs"
+            tensorboard_log="./f110_line_sensor_logs",
+            device="cuda" if torch.cuda.is_available() else "cpu"
         )
     else :
-        model = SAC.load("f110_line_sensor_sac.zip",env=env)
+        model = SAC.load("f110_line_sensor_sac.zip", env=env, device="cuda")
 
     try:
+        print("Model is on device:", model.device)
         # Train indefinitely in chunks of 100,000 timesteps.
         while True:
-            model.learn(total_timesteps=100000,callback=callBack)
+            model.learn(total_timesteps=100_000,callback=callBack)
             model.save("f110_line_sensor_sac")
     except KeyboardInterrupt:
         print("Training interrupted. Saving model...")
