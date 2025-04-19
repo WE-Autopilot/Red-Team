@@ -6,6 +6,8 @@ import random
 import os
 from stable_baselines3 import SAC
 from f110_gym.envs.f110_env import F110Env
+import pyglet
+import random
 
 class F110LineSensorEnv(gym.Env):
     """
@@ -177,3 +179,5 @@ if __name__ == "__main__":
     model = SAC.load("f110_line_sensor_sac.zip")
     
     demo_rendering(model, env)
+
+    

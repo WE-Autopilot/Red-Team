@@ -90,6 +90,40 @@ class F110LineSensorEnv(gym.Env):
  
          return observation
 
+    def map_reset(self):
+    
+        maps = ["BrandsHatch","Budapest","example","IMS","Spielberg"]
+        index = random.randrange(0,5)
+        self.f110.update_map("/Users/alielgalad/Desktop/Red-Team/assets/"+maps[index]+"_map.yaml", ".png")
+
+        unit_Circle = np.array([0,np.pi/6,np.pi/4,np.pi/3,np.pi/2,2*np.pi/3,3*np.pi/4,5*np.pi/6,np.pi,7*np.pi/6,5*np.pi/4,4*np.pi/3,3*np.pi/2,5*np.pi/3,7*np.pi/4,11*np.pi/6])
+        distance = 0
+        best_angle = 0
+        for angle in unit_Circle:
+            observation = self.reset(angle=angle)
+            value_straight_ahead = observation[0]
+
+            if(value_straight_ahead>distance):
+                distance = value_straight_ahead
+                best_angle = angle
+
+            if(distance>=9.99):
+                best_angle = angle
+                break
+        
+
+
+        init_pose = np.array([[0.0, 0.0, best_angle]])  # Starting position
+        obs, _, _, _ = self.f110.reset(init_pose)
+        observation = self._get_observation(obs)
+
+        self.f110.renderer.poses = None 
+        self.f110.renderer.batch = pyglet.graphics.Batch()
+        self.f110.renderer.update_obs(obs)
+        self.f110.renderer.update_map("../assets/"+maps[index]+"_map",".png")
+
+        return observation
+    
     def step(self, action):
         self.num_steps += 1
         
@@ -132,7 +166,7 @@ class F110LineSensorEnv(gym.Env):
         
         sensor_values = self._get_observation(obs_dict)[:-1]
         safety_penalty = sum([max(0, 1.0 - (v/2.0)) for v in sensor_values])
-        steering_penalty = abs(action[0]) * 0.1
+        steering_penalty = abs(action[0]) * 0.1 ## Take the current steering angle and the recommended steeringh model and cross prod them, and then * by speed, that's your penalty
         collision_penalty = 10.0 if self.f110.sim.agents[0].in_collision else 0.0
         
         return speed_reward - safety_penalty - steering_penalty - collision_penalty
@@ -165,7 +199,6 @@ def train_model():
         max_episode_steps=1000
     )
     callBack = CustomCallback()
-
     check_env(env)  # Verify that your environment adheres to Gym's interface
 
     # Define the network architecture for SAC.
