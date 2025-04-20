@@ -95,7 +95,6 @@ class F110LineSensorEnv(gym.Env):
          return observation
 
 
-    
     def step(self, action):
         self.num_steps += 1
         
@@ -112,35 +111,32 @@ class F110LineSensorEnv(gym.Env):
             done = True
             
         return observation, reward, done, info
-
+        
     def _get_observation(self, obs_dict):
-        """Process LIDAR scan into 5 sensor readings and add speed."""
         scan = obs_dict['scans'][0]
-        sensor_readings = []
-        
-        # Convert angles to LIDAR indices
-        for angle in self.sensor_angles:
-            idx = int((angle + 134.645) / (0.2493427440718179))  # Convert angle to LIDAR index
-            idx = np.clip(idx, 0, len(scan)-1)
-            distance = scan[idx] 
-            sensor_readings.append(distance)
-        
-        # Add normalized speed (0-1 scale)
-        speed = obs_dict['linear_vels_x'][0] / 4.0  # Assuming max speed ~4 m/s
-        sensor_readings.append(np.clip(speed, 0.0, 1.0))
-        
-        return np.array(sensor_readings, dtype=np.float32)
+        n = len(scan)
+        fov = 2 * np.deg2rad(134.645)
+        scan_angles = np.linspace(-fov/2, fov/2, n)
+        desired_angles = np.linspace(-fov/2, fov/2, len(self.sensor_angles))
+
+        sensor_vals = np.interp(desired_angles, scan_angles, scan)
+        sensor_vals = np.clip(sensor_vals, 0.0, self.max_range)
+
+        speed = obs_dict['linear_vels_x'][0] / 4.0
+        return np.concatenate([sensor_vals, [np.clip(speed, 0.0, 1.0)]]).astype(np.float32)
+
 
     def _calculate_reward(self, obs_dict, action):
-        """Simple reward function encouraging speed and safety."""
         speed = obs_dict['linear_vels_x'][0]
-        speed_reward = speed * 0.2
-        
-        sensor_values = self._get_observation(obs_dict)[:-1]
-        safety_penalty = sum([max(0, 1.0 - (v/2.0)) for v in sensor_values])
-        steering_penalty = abs(action[0]) * 0.1 ## Take the current steering angle and the recommended steeringh model and cross prod them, and then * by speed, that's your penalty
+        speed_reward = 0.2 * speed
+
+        obs = self._get_observation(obs_dict)
+        sensor_vals = obs[:-1] / self.max_range       # normalize to [0,1]
+        # average penalty, so it stays O(1) regardless of ray count
+        safety_penalty = np.mean(np.maximum(0, 1.0 - sensor_vals))
+        steering_penalty = 0.1 * abs(action[0])
         collision_penalty = 10.0 if self.f110.sim.agents[0].in_collision else 0.0
-        
+
         return speed_reward - safety_penalty - steering_penalty - collision_penalty
 
     def render(self, mode='human'):
@@ -151,11 +147,11 @@ class CustomCallback(BaseCallback):
          super().__init__(verbose)
  
      def _on_step(self):
-         if(self.num_timesteps%10000 == 0):
+         if(self.num_timesteps % 10000 == 0):
              self.training_env.envs[0].map_reset()
         
-         if(self.num_timesteps >= 5000000):
-             return False
+         if(self.num_timesteps % 100000 == 0):
+             self.model.save("f110_line_sensor_sac")
          return True
 
 def train_model():
@@ -202,9 +198,8 @@ def train_model():
     try:
         print("Model is on device:", model.device)
         # Train indefinitely in chunks of 100,000 timesteps.
-        while True:
-            model.learn(total_timesteps=100_000,callback=callBack)
-            model.save("f110_line_sensor_sac")
+        model.learn(total_timesteps=5000000,callback=callBack)
+        model.save("f110_line_sensor_sac")
     except KeyboardInterrupt:
         print("Training interrupted. Saving model...")
         model.save("f110_line_sensor_sac")
@@ -224,7 +219,7 @@ def demo_rendering(model, env):
         env.render("human_fast")
         
         action, _ = model.predict(obs)
-        action[1] = 2  # Force high throttle
+        action[1] = 1.0
         
         obs, reward, done, info = env.step(action)
 
