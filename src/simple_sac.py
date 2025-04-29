@@ -97,8 +97,7 @@ class F110LineSensorEnv(gym.Env):
 
     def step(self, action):
         self.num_steps += 1
-        
-        # Ensure minimum throttle is maintained
+
         action[1] = np.clip(action[1], 0.4, 1.0)
         
         # Step the underlying environment
@@ -125,19 +124,13 @@ class F110LineSensorEnv(gym.Env):
         speed = obs_dict['linear_vels_x'][0] / 4.0
         return np.concatenate([sensor_vals, [np.clip(speed, 0.0, 1.0)]]).astype(np.float32)
 
-
     def _calculate_reward(self, obs_dict, action):
-        speed = obs_dict['linear_vels_x'][0]
-        speed_reward = 0.2 * speed
-
         obs = self._get_observation(obs_dict)
-        sensor_vals = obs[:-1] / self.max_range       # normalize to [0,1]
-        # average penalty, so it stays O(1) regardless of ray count
+        sensor_vals = obs[:-1] / self.max_range    
         safety_penalty = np.mean(np.maximum(0, 1.0 - sensor_vals))
-        steering_penalty = 0.1 * abs(action[0])
-        collision_penalty = 10.0 if self.f110.sim.agents[0].in_collision else 0.0
 
-        return speed_reward - safety_penalty - steering_penalty - collision_penalty
+        return float(safety_penalty)
+
 
     def render(self, mode='human'):
         return self.f110.render(mode)
