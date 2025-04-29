@@ -1,0 +1,6 @@
+image: map34.pgm
+resolution: 0.062500
+origin: [-52.61408882354792,-48.65017843345723, 0.000000]
+negate: 0
+occupied_thresh: 0.45
+free_thresh: 0.196

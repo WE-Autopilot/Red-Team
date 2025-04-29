@@ -3,4 +3,3 @@ __pycache__/
 /out/checkpoints/*
 /src/f110_lidar_logs/
 /src/f110_line_sensor_logs/
-/src/output/
