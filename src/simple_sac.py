@@ -10,6 +10,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from f110_gym.envs.f110_env import F110Env
 import torch
 from statistics import mean
+import csv
 
 print("CUDA available:", torch.cuda.is_available())
 print("CUDA device name:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A")
@@ -55,6 +56,9 @@ class F110LineSensorEnv(gym.Env):
         self.prev_dist = 0.0
         self.angle_number = None
         self.prev_pose = np.array([0.0,0.0])
+        self.success = 0
+        self.prev_success = None
+        self.episodes = 0
 
     def reset(self, angle = np.pi/2):
         self.angle_number = None
@@ -67,31 +71,39 @@ class F110LineSensorEnv(gym.Env):
     
     def map_reset(self):
      
-         maps = ["BrandsHatch","Budapest","example","IMS","Spielberg"]
-         index = random.randrange(0,5)
+         index = random.randrange(0,41)
 
          current_directory = os.getcwd()
-         map_path = os.path.abspath(os.path.join(current_directory, "..", "assets", maps[index] + "_map.yaml"))
+         map_path = os.path.abspath(os.path.join(current_directory, "..", "assets", f"map{index}.yaml"))
          self.f110.update_map(map_path, ".png")
  
-         unit_Circle = np.array([0,np.pi/6,np.pi/4,np.pi/3,np.pi/2,2*np.pi/3,3*np.pi/4,5*np.pi/6,np.pi,7*np.pi/6,5*np.pi/4,4*np.pi/3,3*np.pi/2,5*np.pi/3,7*np.pi/4,11*np.pi/6])
-         distance = 0
-         best_angle = 0
-         for angle in unit_Circle:
-             observation = self.reset(angle=angle)
-             value_straight_ahead = observation[13]
+        #  unit_Circle = np.array([0,np.pi/6,np.pi/4,np.pi/3,np.pi/2,2*np.pi/3,3*np.pi/4,5*np.pi/6,np.pi,7*np.pi/6,5*np.pi/4,4*np.pi/3,3*np.pi/2,5*np.pi/3,7*np.pi/4,11*np.pi/6])
+        #  distance = 0
+        #  best_angle = 0
+        #  for angle in unit_Circle:
+        #      observation = self.reset(angle=angle)
+        #      value_straight_ahead = observation[13]
  
-             if(value_straight_ahead>distance):
-                 distance = value_straight_ahead
-                 best_angle = angle
+        #      if(value_straight_ahead>distance):
+        #          distance = value_straight_ahead
+        #          best_angle = angle
  
-             if(distance>=9.99):
-                 best_angle = angle
+        #      if(distance>=9.99):
+        #          best_angle = angle
+        #          break
+
+         with open(f"map{index}.csv") as csvfile:
+             reader = csv.reader(csvfile)
+             for lines in reader :
+                 x = float(lines[0])
+                 y = float(lines[1])
+                 theta = float(lines[2])
                  break
+
          
  
  
-         init_pose = np.array([[0.0, 0.0, best_angle]])  # Starting position
+         init_pose = np.array([[x, y, theta]])  # Starting position
          obs, _, _, _ = self.f110.reset(init_pose)
          observation = self._get_observation(obs)
  
@@ -99,13 +111,13 @@ class F110LineSensorEnv(gym.Env):
             self.f110.renderer.poses = None
             self.f110.renderer.batch = pyglet.graphics.Batch()
             self.f110.renderer.update_obs(obs)
-            self.f110.renderer.update_map("../assets/"+maps[index]+"_map",".png")
+            self.f110.renderer.update_map("../assets/"+f"map{index}.png")
  
          return observation
 
 
     def step(self, action):
-        self.num_steps += 1
+        
         
         # Ensure minimum throttle is maintained
         action[1] = np.clip(action[1], 0.4, 1.0)
@@ -123,6 +135,17 @@ class F110LineSensorEnv(gym.Env):
 
         if(collided):    
             done = True
+            self.episodes += 1
+            self.prev_success = False
+
+            if(self.episodes == 100):
+                self.map_reset()
+                self.episodes = 0
+        elif done==True and (self.success== 0 or self.prev_success == True):
+            self.episodes += 1
+            self.success = self.success + 1
+            self.prev_success = True
+        
             
         return observation, reward, done, info
         
@@ -237,6 +260,11 @@ class CustomCallback(BaseCallback):
      def _on_step(self):
          if(self.num_timesteps % 10000 == 0):
              self.training_env.envs[0].map_reset() 
+        
+         if(self.training_env.envs[0].prev_success >= 500):
+                 return False
+             
+             
 
          if(self.num_timesteps % 1000 == 0):
              print("Speed:",mean(logs["speed"]))
@@ -260,7 +288,7 @@ def train_model():
     """)
     choice = input()
 
-    MAP_PATH = "../assets/example_map"  # Update with your map path
+    MAP_PATH = "../assets/map4"  # Update with your map path
 
     env = F110LineSensorEnv(
         map_path=MAP_PATH,

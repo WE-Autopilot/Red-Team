@@ -255,7 +255,7 @@ def demo_rendering(model, env):
     env.close()
 
 if __name__ == "__main__":
-    MAP_PATH = "../assets/IMS_map"  # Update with your map path
+    MAP_PATH = "../assets/example_map"  # Update with your map path
 
     env = F110LineSensorEnv(
         map_path=MAP_PATH,
