@@ -288,7 +288,7 @@ def train_model():
     """)
     choice = input()
 
-    MAP_PATH = "../assets/map4"  # Update with your map path
+    MAP_PATH = "../assets/map40"  # Update with your map path
 
     env = F110LineSensorEnv(
         map_path=MAP_PATH,
