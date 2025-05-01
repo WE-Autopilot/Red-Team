@@ -6,19 +6,18 @@ from stable_baselines3 import SAC
 class Controller(AbstractModel):
     def __init__(self, model_path="f110_line_sensor_sac.zip"):
         super().__init__()
-        self.model = SAC.load(model_path)
+        self.model = None
+        self.model_path = model_path
 
         self.sensor_angles = np.arange(-134.645, 134.645, 9.97370976287)
         self.max_range = 10.0
         self.fov = 4.7
 
-    def init():
-        pass
-
-    def startup(self, waypoints):
-        self.waypoints = waypoints
+    def init(self):
+        self.model = SAC.load(self.model_path)
 
     def eval(self, obs, timestamp = 0):
+        self.init()
         # pull out the 1080-beam scan
         scan = obs["scans"][0]
         n = len(scan)
@@ -31,7 +30,11 @@ class Controller(AbstractModel):
         speed = float(np.clip(speed, 0.0, 1.0))
         obs_vec = np.concatenate([vals, [speed]]).astype(np.float32)
 
-        steer, throttle = self.model.predict(obs_vec, deterministic=True)
+        action, _states = self.model.predict(obs_vec, deterministic=True)
+        throttle = action[1]
+        steer = action[0]
+
+
         throttle = float(np.clip(throttle, 0.4, 2.0))
 
         return throttle, float(steer)

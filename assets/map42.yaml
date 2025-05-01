@@ -1,0 +1,11 @@
+image: map22.pgm
+resolution: 0.062500
+origin: [-78.01882280741752,-44.136773803941416, 0.000000]
+negate: 0
+occupied_thresh: 0.45
+free_thresh: 0.196
+sx: 0.0
+sy: 0.0
+stheta: 1.58198124
+map_path: ../assets/maps/map22
+map_ext: .png

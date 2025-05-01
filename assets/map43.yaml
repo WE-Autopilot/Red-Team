@@ -1,0 +1,11 @@
+image: map24.pgm
+resolution: 0.062500
+origin: [-78.30974408624516,-43.94525037427618, 0.000000]
+negate: 0
+occupied_thresh: 0.45
+free_thresh: 0.196
+sx: 0.0
+sy: 0.0
+stheta: 1.61776277
+map_path: ../assets/maps/map24
+map_ext: .png
