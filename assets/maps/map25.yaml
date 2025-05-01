@@ -1,0 +1,11 @@
+image: map25.pgm
+resolution: 0.062500
+origin: [-77.89684288096751,-44.23937277952131, 0.000000]
+negate: 0
+occupied_thresh: 0.45
+free_thresh: 0.196
+sx: 0.0
+sy: 0.0
+stheta: 1.56478806
+map_path: ../assets/maps/map25
+map_ext: .png

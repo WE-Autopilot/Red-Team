@@ -1,0 +1,11 @@
+image: map26.pgm
+resolution: 0.062500
+origin: [-60.26573630542937,-47.200992790442676, 0.000000]
+negate: 0
+occupied_thresh: 0.45
+free_thresh: 0.196
+sx: 0.0
+sy: 0.0
+stheta: 0.18970488
+map_path: ../assets/maps/map26
+map_ext: .png

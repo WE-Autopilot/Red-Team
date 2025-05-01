@@ -1,0 +1,11 @@
+image: map3.pgm
+resolution: 0.062500
+origin: [-78.08793049466084,-44.39879589525641, 0.000000]
+negate: 0
+occupied_thresh: 0.45
+free_thresh: 0.196
+sx: 0.0
+sy: 0.0
+stheta: 1.58579608
+map_path: maps/map3
+map_ext: .png

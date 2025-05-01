@@ -1,0 +1,11 @@
+image: map4.pgm
+resolution: 0.062500
+origin: [-77.81745562103463,-44.259473230251636, 0.000000]
+negate: 0
+occupied_thresh: 0.45
+free_thresh: 0.196
+sx: 0.0
+sy: 0.0
+stheta: 1.57006394
+map_path: maps/map4
+map_ext: .png

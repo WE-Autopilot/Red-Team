@@ -1,6 +1,9 @@
 import os
 import numpy as np
 from weap_util.abstract_controller import AbstractModel
+import gym
+gym.__version__ = "0.21.0"   # lie to SB3 about the gym version
+gym.spaces.Box.shape = property(lambda self: self._shape)
 from stable_baselines3 import SAC
 
 class Controller(AbstractModel):
@@ -12,13 +15,21 @@ class Controller(AbstractModel):
         self.sensor_angles = np.arange(-134.645, 134.645, 9.97370976287)
         self.max_range = 10.0
         self.fov = 4.7
+        print(self.model_path)
+        self.first_run = True
+
+    def startup(self):
+        print("LOL")
+        pass
 
     def init(self):
-        self.model = SAC.load(self.model_path)
+        pass
 
     def eval(self, obs, timestamp = 0):
-        self.init()
         # pull out the 1080-beam scan
+        if(self.first_run):
+            self.model = SAC.load(self.model_path)
+            self.first_run = False
         scan = obs["scans"][0]
         n = len(scan)
         # interpolate down to your 27 angles
@@ -35,7 +46,7 @@ class Controller(AbstractModel):
         steer = action[0]
 
 
-        throttle = float(np.clip(throttle, 0.4, 2.0))
+        throttle = float(np.clip(throttle, 0.4, 10.0))
 
         return throttle, float(steer)
 

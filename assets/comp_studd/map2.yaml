@@ -1,0 +1,11 @@
+image: map2.pgm
+resolution: 0.062500
+origin: [-78.25892216137227,-43.90664298017666, 0.000000]
+negate: 0
+occupied_thresh: 0.45
+free_thresh: 0.196
+sx: 0.0
+sy: 0.0
+stheta: 1.60963453
+map_path: maps/map2
+map_ext: .png

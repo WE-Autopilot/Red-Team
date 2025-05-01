@@ -92,7 +92,8 @@ class F110LineSensorEnv(gym.Env):
         #          best_angle = angle
         #          break
 
-         with open(f"map{index}.csv") as csvfile:
+         map_path = os.path.abspath(os.path.join(current_directory, "..", "assets", f"map{index}.csv"))
+         with open(map_path) as csvfile:
              reader = csv.reader(csvfile)
              for lines in reader :
                  x = float(lines[0])
@@ -261,7 +262,7 @@ class CustomCallback(BaseCallback):
          if(self.num_timesteps % 10000 == 0):
              self.training_env.envs[0].map_reset() 
         
-         if(self.training_env.envs[0].prev_success >= 500):
+         if(self.training_env.envs[0].success >= 500):
                  return False
              
              
