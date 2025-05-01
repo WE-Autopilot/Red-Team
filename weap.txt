@@ -1,0 +1,2 @@
+-e git+https://github.com/WE-Autopilot/f1tenth_gym.git@46835948ddbc926ff3e48dc9662482ade59d3f92#egg=f110_gym&subdirectory=gym
+-e git+https://github.com/WE-Autopilot/f1tenth_gym.git@46835948ddbc926ff3e48dc9662482ade59d3f92#egg=weap_util&subdirectory=weap_util

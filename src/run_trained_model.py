@@ -268,5 +268,3 @@ if __name__ == "__main__":
     model = SAC.load("f110_line_sensor_sac.zip")
     
     demo_rendering(model, env)
-
-    
